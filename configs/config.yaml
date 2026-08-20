@@ -1,0 +1,59 @@
+# =====================================================================
+# Biceps Brachii Ultrasound Segmentation Configuration
+# =====================================================================
+
+project:
+  name: "Biceps_Brachii_US_Segmentation"
+  version: "1.0.0"
+  device: "cuda"  # "cuda" or "cpu"
+
+data:
+  # Paths can be relative to this project folder or absolute paths
+  raw_bin_dir: "../BIN FILE"
+  image_dir: "../dataset/images"
+  mask_dir: "../dataset/masks"
+  
+  # Image parameters
+  image_height: 512
+  image_width: 512
+  in_channels: 1          # 1 for grayscale B-mode, 3 for RGB
+  num_classes: 1          # Binary segmentation (1: Biceps Brachii, 0: Background)
+  
+  # Dataset split ratios
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  random_seed: 42
+
+augmentation:
+  horizontal_flip_prob: 0.5
+  random_brightness_contrast_prob: 0.3
+  shift_scale_rotate_prob: 0.4
+  gaussian_noise_prob: 0.2
+
+model:
+  architecture: "Unet"    # Options: "Unet", "UnetPlusPlus", "DeepLabV3Plus", "FPN"
+  encoder_name: "resnet34" # Options: "resnet34", "resnet50", "efficientnet-b2", "mobilenet_v2"
+  encoder_weights: "imagenet"
+  in_channels: 1
+  classes: 1
+  activation: "sigmoid"
+
+training:
+  batch_size: 8
+  num_workers: 2
+  epochs: 50
+  lr: 0.0001
+  weight_decay: 0.00001
+  scheduler: "CosineAnnealingLR"  # "CosineAnnealingLR" or "ReduceLROnPlateau"
+  min_lr: 0.000001
+  loss_type: "dice_bce"           # "dice_bce", "dice", "bce", or "focal"
+  early_stopping_patience: 10
+  save_dir: "./weights"
+
+inference:
+  checkpoint_path: "./weights/best_model.pth"
+  threshold: 0.5
+  output_dir: "./outputs"
+  save_visualizations: true
+  calculate_muscle_thickness: true

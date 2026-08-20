@@ -1,0 +1,39 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyTorch / checkpoints / weights (keep only .gitkeep)
+weights/*.pth
+weights/*.pt
+weights/*.onnx
+!weights/.gitkeep
+
+# Datasets and raw binary/image sequences (stored in parent folder)
+*.bin
+*.csv
+*.mat
+*.png
+*.jpg
+*.jpeg
+data/
+dataset/
+
+# Logs and training runs
+runs/
+logs/
+wandb/
+.pytest_cache/
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# OS specific files
+.DS_Store
+Thumbs.db
