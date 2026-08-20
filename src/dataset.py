@@ -1,4 +1,5 @@
 import os
+import glob
 import cv2
 import numpy as np
 import torch
@@ -106,7 +107,7 @@ def get_transforms(cfg, split="train"):
 def build_dataloaders(cfg):
     """
     Match image and mask files from dataset directories, split into train/val/test,
-    and create PyTorch DataLoaders.
+    and create PyTorch DataLoaders. Supports flat and recursive directory layouts.
     """
     image_dir = cfg["data"]["image_dir"]
     mask_dir = cfg["data"]["mask_dir"]
@@ -124,34 +125,46 @@ def build_dataloaders(cfg):
         raise FileNotFoundError(f"Mask directory not found at: {mask_dir}")
 
     valid_extensions = (".png", ".jpg", ".jpeg", ".tif", ".bmp")
-    image_files = sorted([f for f in os.listdir(image_dir) if f.lower().endswith(valid_extensions)])
     
+    # Collect all image files (recursive)
+    image_paths = []
+    for root, _, files in os.walk(image_dir):
+        for f in files:
+            if f.lower().endswith(valid_extensions):
+                image_paths.append(os.path.join(root, f))
+    image_paths = sorted(image_paths)
+
+    # Collect all mask files into lookup dict (key = filename without extension)
+    mask_lookup = {}
+    for root, _, files in os.walk(mask_dir):
+        for f in files:
+            if f.lower().endswith(valid_extensions):
+                bname = os.path.splitext(f)[0]
+                mask_lookup[bname] = os.path.join(root, f)
+
     matched_images = []
     matched_masks = []
 
-    for img_name in image_files:
-        base_name, _ = os.path.splitext(img_name)
-        # Search for corresponding mask with same basename
-        found = False
-        for ext in valid_extensions:
-            mask_candidate = os.path.join(mask_dir, f"{base_name}{ext}")
-            if os.path.exists(mask_candidate):
-                matched_images.append(os.path.join(image_dir, img_name))
-                matched_masks.append(mask_candidate)
-                found = True
-                break
-            # Try appending '_mask' suffix
-            mask_candidate_suffix = os.path.join(mask_dir, f"{base_name}_mask{ext}")
-            if os.path.exists(mask_candidate_suffix):
-                matched_images.append(os.path.join(image_dir, img_name))
-                matched_masks.append(mask_candidate_suffix)
-                found = True
-                break
+    for img_p in image_paths:
+        img_bname = os.path.splitext(os.path.basename(img_p))[0]
+        # Direct match
+        if img_bname in mask_lookup:
+            matched_images.append(img_p)
+            matched_masks.append(mask_lookup[img_bname])
+        # Suffix '_mask' match
+        elif f"{img_bname}_mask" in mask_lookup:
+            matched_images.append(img_p)
+            matched_masks.append(mask_lookup[f"{img_bname}_mask"])
 
     if len(matched_images) == 0:
-        raise ValueError(f"No matching image-mask pairs found between '{image_dir}' and '{mask_dir}'.")
+        raise ValueError(
+            f"No matching image-mask pairs found!\n"
+            f"Images found: {len(image_paths)} in {image_dir}\n"
+            f"Masks found: {len(mask_lookup)} in {mask_dir}\n"
+            f"Please verify that mask filenames match image filenames."
+        )
 
-    print(f"Total matched pairs found: {len(matched_images)}")
+    print(f"Total matched image-mask pairs: {len(matched_images)}")
 
     train_ratio = cfg["data"]["train_split"]
     val_ratio = cfg["data"]["val_split"]
@@ -173,7 +186,7 @@ def build_dataloaders(cfg):
         random_state=seed
     )
 
-    print(f"Train samples: {len(train_imgs)}, Val samples: {len(val_imgs)}, Test samples: {len(test_imgs)}")
+    print(f"Split breakdown -> Train: {len(train_imgs)}, Val: {len(val_imgs)}, Test: {len(test_imgs)}")
 
     in_ch = cfg["data"]["in_channels"]
     train_ds = UltrasoundDataset(train_imgs, train_masks, transform=get_transforms(cfg, "train"), in_channels=in_ch)

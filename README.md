@@ -1,95 +1,67 @@
 # Biceps Brachii Ultrasound Segmentation Pipeline
 
-Automated deep learning segmentation and muscle thickness quantification for **Biceps Brachii** from ArtUs/Telemed B-Mode ultrasound data.
+Automated deep learning segmentation, cine viewing, and muscle thickness quantification for **Biceps Brachii** from ArtUs/Telemed B-Mode ultrasound data.
 
 ---
 
-## 📌 Project Architecture
+## 📌 Complete Workflow Architecture
 
-The codebase is contained within `Segmentation_Configuration` for clean version control via GitHub. Large binary ultrasound files (`.bin`) and generated dataset images remain outside the repository in the parent directory (`E:\Probefix`).
-
-```text
-Probefix/                                       <-- Parent Directory (Data storage)
-├── BIN FILE/                                   <-- Raw .bin ultrasound recordings
-├── dataset/
-│   ├── images/                                 <-- Extracted 8-bit grayscale US frames
-│   └── masks/                                  <-- Ground truth binary masks
-│
-└── Segmentation_Configuration/                 <-- GITHUB REPOSITORY
-    ├── configs/
-    │   └── config.yaml                         <-- Project parameters & paths
-    ├── matlab_converter/
-    │   └── convert_bin2dataset.m               <-- B-mode conversion with EchoWave DR 78dB
-    ├── src/
-    │   ├── dataset.py                          <-- PyTorch Dataset & Augmentations
-    │   ├── model.py                            <-- U-Net / SMP Model Architecture
-    │   ├── utils.py                            <-- Metrics, Loss, & Muscle Thickness calculation
-    │   ├── train.py                            <-- Model Training Loop
-    │   └── evaluate.py                         <-- Evaluation & Visual Overlay
-    ├── weights/                                <-- Model checkpoints (.pth)
-    ├── requirements.txt                        <-- Python dependencies
-    ├── .gitignore                              <-- Git exclusions
-    └── README.md
+```mermaid
+graph TD
+    A["Raw .bin Files (E:\Probefix\britty)"] -->|1. Run convert_bin2dataset.m di MATLAB| B["Master Preprocessing (MATLAB)"]
+    B --> C1["Gambar Satuan Proporsional (dataset/images)"]
+    B --> C2["Gambar Gabungan Horizontal (dataset/horizontal_stitched_filmstrip)"]
+    B --> C3["Matriks Numerik .CSV Gilang (dataset/stitched_gilang)"]
+    C1 --> D["2. Anotasi Label (Labelme / CVAT)"]
+    C1 --> E["3. High-Speed Cine Viewer (Run_Ultrasound_Viewer.bat)"]
+    D --> F["4. Training Model U-Net (python src/train.py)"]
+    F --> G["5. Evaluasi & Analisis Tebal Otot (python src/analyze_trials.py)"]
 ```
 
 ---
 
-## 🚀 Quickstart Guide
+## 🚀 Step-by-Step Execution Guide
 
-### 1. Convert `.bin` Video to Grayscale Frames
-Open MATLAB and run the script:
+### Langkah 1: Preprocessing di MATLAB (Master Preprocessor)
+Buka MATLAB dan jalankan skrip konversi utama:
 ```matlab
-run('matlab_converter/convert_bin2dataset.m')
+run('E:\Probefix\Segmentation_Configuration\matlab_converter\convert_bin2dataset.m')
 ```
-* Applies Hilbert Envelope Detection and **Logarithmic Dynamic Range Compression (DR = 78 dB)** matching EchoWave software.
-* Generates normalized 8-bit PNG images in `../dataset/images/`.
-
-### 2. Annotate Ground Truth Masks
-Annotate the Biceps Brachii region (between the superficial fascia and the deep aponeurosis):
-* Tools: [Labelme](https://github.com/wkentaro/labelme) or [CVAT](https://www.cvat.ai/).
-* Save the binary masks (white = Biceps Brachii, black = Background) in `../dataset/masks/` with names matching the image files (e.g. `img_xxx_slice_0001.png`).
-
-### 3. Setup Python Environment
-```bash
-cd Segmentation_Configuration
-pip install -r requirements.txt
-```
-
-### 4. Train the Segmentation Model
-```bash
-python src/train.py
-```
-* Automatically splits dataset into **80% Train, 10% Validation, 10% Test**.
-* Saves the best performing model checkpoint to `weights/best_model.pth`.
-
-### 5. Evaluate and Measure Muscle Thickness
-```bash
-python src/evaluate.py
-```
-* Computes **Dice Coefficient** and **IoU (Intersection over Union)** on the test set.
-* Automatically measures **Muscle Thickness (in mm)** along the muscle profile.
-* Saves visual side-by-side comparison plots in `outputs/`.
+Skrip ini otomatis menghasilkan:
+1. **Gambar Satuan Proporsional ($512 \times 89$ px)** di `dataset/images/{5rm, 10rm}/{trial}/frame_XXXX.png` untuk anotasi.
+2. **Gambar Gabungan Horizontal (Merger Raw 33-Scanlines)** di `dataset/horizontal_stitched_filmstrip/` untuk inspeksi serial penuh.
+3. **Data CSV & M-Mode Gilang** di `dataset/stitched_gilang/` untuk kompatibilitas stiffness.
 
 ---
 
-## ⚙️ Configuration
-All hyperparameters and paths are customizable in [`configs/config.yaml`](file:///e:/Probefix/Segmentation_Configuration/configs/config.yaml):
-* `model.architecture`: `Unet`, `UnetPlusPlus`, `DeepLabV3Plus`
-* `model.encoder_name`: `resnet34`, `resnet50`, `efficientnet-b2`
-* `training.epochs`: Number of training epochs (default: `50`)
-* `training.batch_size`: Batch size (default: `8`)
+### Langkah 2: Inspeksi Visual Cepat (High-Speed Cine Viewer)
+Dobel-klik file batch:
+👉 **[`E:\Probefix\Run_Ultrasound_Viewer.bat`](file:///e:/Probefix/Run_Ultrasound_Viewer.bat)**
+* Tahan tombol **Panah Kanan (`→`) / Kiri (`←`)** untuk memutar urutan frame secara instan tanpa lag/buffering pada 60–120 FPS.
+* Tekan **Spasi** untuk play/pause otomatis.
 
 ---
 
-## 📦 GitHub Versioning Workflow
-To initialize and push this configuration to your GitHub repository:
+### Langkah 3: Anotasi Masking Biceps Brachii
+1. Jalankan Labelme:
+   ```bash
+   pip install labelme
+   labelme
+   ```
+2. Buka folder citra satuan di `dataset/images/` dan buat poligon mask untuk Biceps Brachii.
+3. Simpan mask ke dalam `dataset/masks/` dengan struktur nama yang sama.
 
+---
+
+### Langkah 4: Training & Evaluasi Model AI
 ```bash
 cd E:\Probefix\Segmentation_Configuration
-git init
-git add .
-git commit -m "Initial commit: Biceps Brachii segmentation pipeline"
-git branch -M main
-git remote add origin <YOUR_GITHUB_REPOSITORY_URL>
-git push -u origin main
+pip install -r requirements.txt
+
+# Latih model segmentasi
+python src/train.py
+
+# Evaluasi & ekstrak kurva ketebalan otot sepanjang waktu rekaman
+python src/analyze_trials.py
 ```
+Hasil grafik kurva tebal otot dan perbandingan 5RM vs 10RM akan tersimpan otomatis di `outputs/trial_analysis/`.

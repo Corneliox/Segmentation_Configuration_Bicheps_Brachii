@@ -3,6 +3,7 @@ import sys
 import yaml
 import cv2
 import numpy as np
+import pandas as pd
 import torch
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -19,6 +20,21 @@ def evaluate_model(config_path="configs/config.yaml"):
     device_name = cfg["project"].get("device", "cuda")
     device = torch.device(device_name if torch.cuda.is_available() and device_name == "cuda" else "cpu")
     print(f"Using device: {device}")
+
+    # Read physical scale calibration if available
+    calib_file = cfg["data"].get("calibration_file", "../dataset/spatial_calibration.csv")
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if not os.path.isabs(calib_file):
+        calib_file = os.path.normpath(os.path.join(base_dir, calib_file))
+
+    pixel_spacing_mm = 0.1113  # Default fallback
+    if os.path.exists(calib_file):
+        try:
+            calib_df = pd.read_csv(calib_file)
+            pixel_spacing_mm = float(calib_df["MM_per_pixel"].iloc[0])
+            print(f"Loaded spatial calibration: 1 pixel = {pixel_spacing_mm:.4f} mm")
+        except Exception as e:
+            print(f"Warning reading calibration file: {e}")
 
     # Build Dataloaders
     _, _, test_loader = build_dataloaders(cfg)
@@ -62,10 +78,10 @@ def evaluate_model(config_path="configs/config.yaml"):
                 raw_pred_mask = (preds[0, 0].cpu().numpy() > threshold).astype(np.float32)
                 cleaned_pred = postprocess_mask(raw_pred_mask)
 
-                # Calculate muscle thickness
-                thickness_info = calculate_muscle_thickness(cleaned_pred, pixel_spacing_mm=0.1)
+                # Calculate muscle thickness in millimeters
+                thickness_info = calculate_muscle_thickness(cleaned_pred, pixel_spacing_mm=pixel_spacing_mm)
 
-                # Create 3-panel figure
+                # Create 4-panel figure
                 fig, axes = plt.subplots(1, 4, figsize=(18, 5))
                 
                 axes[0].imshow(img_np, cmap="gray")
@@ -82,13 +98,13 @@ def evaluate_model(config_path="configs/config.yaml"):
                 axes[2].set_title(f"Predicted Biceps Mask\nDice: {metrics['dice']:.3f}, IoU: {metrics['iou']:.3f}")
                 axes[2].axis("off")
 
-                # Boundary Overlay (Aponeurosis Tracking)
+                # Boundary Overlay (Fascia Tracking)
                 contours, _ = cv2.findContours((cleaned_pred * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 overlay = cv2.cvtColor(img_np, cv2.COLOR_GRAY2RGB)
                 cv2.drawContours(overlay, contours, -1, (0, 255, 0), 2)
 
                 axes[3].imshow(overlay)
-                axes[3].set_title(f"Fascia Boundary\nMean Thick: {thickness_info['mean_thickness_mm']:.2f} mm")
+                axes[3].set_title(f"Fascia Boundary\nMean Thickness: {thickness_info['mean_thickness_mm']:.2f} mm")
                 axes[3].axis("off")
 
                 save_path = os.path.join(output_dir, f"eval_{filenames[0]}")

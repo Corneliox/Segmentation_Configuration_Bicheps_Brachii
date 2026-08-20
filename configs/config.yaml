@@ -1,25 +1,30 @@
 # =====================================================================
 # Biceps Brachii Ultrasound Segmentation Configuration
+# Target Data Source: E:\Probefix\britty (5rm & 10rm conditions)
 # =====================================================================
 
 project:
   name: "Biceps_Brachii_US_Segmentation"
-  version: "1.0.0"
+  version: "1.2.0"
   device: "cuda"  # "cuda" or "cpu"
 
 data:
-  # Paths can be relative to this project folder or absolute paths
-  raw_bin_dir: "../BIN FILE"
+  raw_base_dir: "../britty"
+  conditions:
+    - "5rm"
+    - "10rm"
+  
   image_dir: "../dataset/images"
   mask_dir: "../dataset/masks"
+  calibration_file: "../dataset/spatial_calibration.csv"
   
   # Image parameters
+  # Images are isotropically scaled: Height = 512, Width = 89 (or resized to network input)
   image_height: 512
   image_width: 512
-  in_channels: 1          # 1 for grayscale B-mode, 3 for RGB
-  num_classes: 1          # Binary segmentation (1: Biceps Brachii, 0: Background)
+  in_channels: 1          # Grayscale B-mode
+  num_classes: 1          # Binary segmentation (Biceps Brachii)
   
-  # Dataset split ratios
   train_split: 0.8
   val_split: 0.1
   test_split: 0.1
@@ -32,8 +37,8 @@ augmentation:
   gaussian_noise_prob: 0.2
 
 model:
-  architecture: "Unet"    # Options: "Unet", "UnetPlusPlus", "DeepLabV3Plus", "FPN"
-  encoder_name: "resnet34" # Options: "resnet34", "resnet50", "efficientnet-b2", "mobilenet_v2"
+  architecture: "Unet"
+  encoder_name: "resnet34"
   encoder_weights: "imagenet"
   in_channels: 1
   classes: 1
@@ -45,9 +50,9 @@ training:
   epochs: 50
   lr: 0.0001
   weight_decay: 0.00001
-  scheduler: "CosineAnnealingLR"  # "CosineAnnealingLR" or "ReduceLROnPlateau"
+  scheduler: "CosineAnnealingLR"
   min_lr: 0.000001
-  loss_type: "dice_bce"           # "dice_bce", "dice", "bce", or "focal"
+  loss_type: "dice_bce"
   early_stopping_patience: 10
   save_dir: "./weights"
 
@@ -57,3 +62,4 @@ inference:
   output_dir: "./outputs"
   save_visualizations: true
   calculate_muscle_thickness: true
+  pixel_spacing_mm: 0.1113 # Calibrated automatically from spatial_calibration.csv
