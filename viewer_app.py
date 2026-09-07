@@ -35,7 +35,7 @@ class UltrasoundCineViewer:
         self.play_job = None
 
         # Base directories
-        self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.parent_dir = os.path.dirname(self.base_dir)
         self.default_dataset_dir = os.path.join(self.parent_dir, "dataset", "images")
 

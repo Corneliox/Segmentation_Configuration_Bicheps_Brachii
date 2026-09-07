@@ -4,6 +4,8 @@ ULTRASOUND IMAGE LAB & PARAMETER TUNING STUDIO
 =====================================================================
 Ultra-Fast Interactive GUI for Real-Time B-Mode Parameter Tuning:
 - Instant Frame Seeking (Zero startup delay)
+- Auto-detects Sebastian dataset (Full Array 128 scanlines)
+- Dynamic physical aspect ratio scaling
 - Real-time parameter sliders
 - Side-by-Side before/after visual feedback
 - 1-Click Export to MATLAB & Configuration
@@ -35,15 +37,31 @@ class UltrasoundImageLab:
 
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
         self.parent_dir = os.path.dirname(self.base_dir)
+        self.workspace_root = os.path.dirname(self.parent_dir)
 
-        # Default sample file
-        self.current_bin_file = os.path.join(self.parent_dir, "britty", "10rm", "data_open2", "i101_1112.bin")
-        if not os.path.exists(self.current_bin_file):
+        # Default sample file discovery (Prioritize Sebastian dataset)
+        self.current_bin_file = ""
+        possible_roots = [
+            os.path.join(self.workspace_root, "Probefix - Sebastian"),
+            os.path.join(self.parent_dir, "Probefix - Sebastian"),
+            r"D:\~Ideas n Innovation\~~Taiwan\AU\Probefix Segmentation\Probefix - Sebastian"
+        ]
+        
+        for p in possible_roots:
+            if os.path.exists(p):
+                bins = [os.path.join(r, f) for r, d, fs in os.walk(p) for f in fs if f.endswith('.bin')]
+                if bins:
+                    self.current_bin_file = bins[0]
+                    break
+
+        if not self.current_bin_file:
             bins = [os.path.join(r, f) for r, d, fs in os.walk(self.parent_dir) for f in fs if f.endswith('.bin')]
             if bins: self.current_bin_file = bins[0]
 
-        self.num_samples = 2959
-        self.num_lines = 33
+        self.num_samples = 4673
+        self.num_lines = 128
+        self.depth_mm = 90.0
+        self.width_mm = 38.4
         self.total_frames = 0
         self.frame_stride = 0
         self.frame_header_bytes = 0
@@ -54,7 +72,7 @@ class UltrasoundImageLab:
         self.setup_styles()
         self.create_ui()
         
-        if os.path.exists(self.current_bin_file):
+        if self.current_bin_file and os.path.exists(self.current_bin_file):
             self.load_bin_file(self.current_bin_file)
 
     def setup_styles(self):
@@ -106,7 +124,7 @@ class UltrasoundImageLab:
 
         # Section 3: Width Scale
         ttk.Label(control_panel, text="── [ 3. Spatial Geometry ] ──", style="Section.TLabel").pack(fill=tk.X, pady=(8, 4))
-        self.create_slider(control_panel, "Output Width Scaling", "width_scale", 1.0, 2.5, 1.3)
+        self.create_slider(control_panel, "Output Width Scaling", "width_scale", 0.5, 2.0, 1.0)
 
         # Action Buttons
         btn_box = tk.Frame(control_panel, bg="#1c1c1c")
@@ -165,7 +183,7 @@ class UltrasoundImageLab:
         self.render_current_frame()
 
     def browse_bin(self):
-        f = filedialog.askopenfilename(initialdir=self.parent_dir, title="Select ArtUs .BIN File", filetypes=[("BIN files", "*.bin")])
+        f = filedialog.askopenfilename(initialdir=self.workspace_root, title="Select ArtUs .BIN File", filetypes=[("BIN files", "*.bin")])
         if f:
             self.load_bin_file(f)
 
@@ -186,6 +204,20 @@ class UltrasoundImageLab:
                 self.num_samples = hdr[6]
                 self.num_lines = hdr[7]
                 self.source_id = hdr[3]
+                sampling_ns = hdr[8]
+
+                # Physical geometry
+                c_sound = 1540.0
+                dz_mm = (c_sound * (sampling_ns * 1e-9) / 2.0) * 1000.0
+                self.depth_mm = self.num_samples * dz_mm
+
+                beam_bytes = f.read(3 * self.num_lines * 4)
+                if len(beam_bytes) == 3 * self.num_lines * 4:
+                    beams = struct.unpack(f'<{3 * self.num_lines}i', beam_bytes)
+                    xs = [beams[3*i] / 10000.0 for i in range(self.num_lines)]
+                    self.width_mm = (max(xs) - min(xs)) * 10.0
+                else:
+                    self.width_mm = 38.4 if self.num_lines >= 64 else 9.9
 
                 self.frame_header_bytes = (num_header_els * 4) + (3 * self.num_lines * 4) + (self.num_lines * 4)
                 data_elements = self.num_samples * self.num_lines * 2 if self.source_id == 4 else self.num_samples * self.num_lines
@@ -248,9 +280,10 @@ class UltrasoundImageLab:
 
         img_8u = (np.clip(b_db, 0, 1) * 255.0).astype(np.uint8)
 
-        # Spatial Resampling
+        # Spatial Resampling based on exact physical aspect ratio
         target_h = 512
-        base_w = int(round(512 * (9.9 / 57.0)))  # 89 px
+        aspect_ratio = self.width_mm / self.depth_mm
+        base_w = int(round(target_h * aspect_ratio))
         target_w = max(33, int(round(base_w * params["width_scale"])))
         resized = cv2.resize(img_8u, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
 
@@ -276,7 +309,11 @@ class UltrasoundImageLab:
         b_db = np.clip(b_db, 0.0, 1.0)
         b_db = cv2.GaussianBlur(b_db, (0, 0), 0.8)
         img_8u = (b_db * 255.0).astype(np.uint8)
-        return cv2.resize(img_8u, (89, 512), interpolation=cv2.INTER_CUBIC)
+        
+        target_h = 512
+        aspect_ratio = self.width_mm / self.depth_mm
+        target_w = int(round(target_h * aspect_ratio))
+        return cv2.resize(img_8u, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
 
     def render_current_frame(self):
         if self.current_rf_mat is None:
@@ -318,9 +355,9 @@ class UltrasoundImageLab:
         frame_num = int(round(params["frame_idx"]))
         hud_text = (
             f"Frame {frame_num:04d}/{self.total_frames:04d} | "
-            f"DR: {params['dr_dB']:.1f} dB | Gain: {params['gain']:.1f}x | "
-            f"Rej: {params['rejection']:.0f}% | Gamma: {params['gamma']:.2f} | "
-            f"Sharpen: {params['sharpen']:.1f} | CLAHE: {params['clahe']:.1f}"
+            f"Array: {self.num_lines}L x {self.num_samples}S | "
+            f"Depth: {self.depth_mm:.1f}mm | Width: {self.width_mm:.1f}mm | "
+            f"DR: {params['dr_dB']:.1f}dB | Rej: {params['rejection']:.0f}%"
         )
         self.hud.config(text=hud_text)
 

@@ -1,27 +1,27 @@
 # =====================================================================
 # Biceps Brachii Ultrasound Segmentation Configuration
-# Target Data Source: E:\Probefix\britty (5rm & 10rm conditions)
+# Target Data Source: Probefix - Sebastian (Full Array 128 Scanlines, L12-5N40-A4)
 # =====================================================================
 
 project:
   name: "Biceps_Brachii_US_Segmentation"
-  version: "1.2.0"
+  version: "2.0.0"
   device: "cuda"  # "cuda" or "cpu"
 
 data:
-  raw_base_dir: "../britty"
-  conditions:
-    - "5rm"
-    - "10rm"
+  raw_base_dir: "../../Probefix - Sebastian"
+  subjects:
+    - "Azmi_-_RM_10"
+    - "Tissa_-_10RM"
   
   image_dir: "../dataset/images"
   mask_dir: "../dataset/masks"
   calibration_file: "../dataset/spatial_calibration.csv"
   
-  # Image parameters
-  # Images are isotropically scaled: Height = 512, Width = 89 (or resized to network input)
+  # Image parameters (Full Aperture: 38.4 mm width x 89.96 mm depth)
+  # Isotropically scaled unit slice: Height = 512 px, Width = 219 px
   image_height: 512
-  image_width: 512
+  image_width: 224        # Divisible by 32 for UNet architectures
   in_channels: 1          # Grayscale B-mode
   num_classes: 1          # Binary segmentation (Biceps Brachii)
   
@@ -62,4 +62,4 @@ inference:
   output_dir: "./outputs"
   save_visualizations: true
   calculate_muscle_thickness: true
-  pixel_spacing_mm: 0.1113 # Calibrated automatically from spatial_calibration.csv
+  pixel_spacing_mm: 0.1757 # 1 px = 0.1757 mm (Depth = 89.96 mm / 512 px)
