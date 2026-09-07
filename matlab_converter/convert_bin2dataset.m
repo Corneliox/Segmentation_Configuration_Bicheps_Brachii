@@ -1,21 +1,21 @@
 %% =====================================================================
 %% convert_bin2dataset.m
-%% ULTRASOUND MASTER PREPROCESSOR (PROBEFIX - SEBASTIAN PIPELINE)
+%% MASTER PREPROCESSOR (METODE MATLAB ASLI GILANG - BERSIH & NOISE-FREE)
 %% =====================================================================
 %% Fitur Unggulan:
-%% 1. Otomatis membaca dataset 'Probefix - Sebastian' (Full Array 128 Scanlines, L12-5N40-A4).
-%% 2. Mengekstrak GAMBAR SATU PER SATU (B-Mode Isotropik 2D HD 512x219 px)
-%%    ke dalam dataset/images/ untuk anotasi AI (Labelme/CVAT).
-%% 3. Menyusun GAMBAR GABUNGAN HORIZONTAL (Raw 128-Scanline Filmstrip)
-%%    ke dalam dataset/horizontal_stitched_filmstrip/ langsung setelah slice selesai.
-%% 4. Mengekspor Matriks Numerik .CSV & M-Mode Metode Gilang.
-%% 5. Menyimpan Master Manifest & Kalibrasi Skala Fisik (mm/pixel).
+%% 1. Menggunakan Rumus Pemrosesan Sinyal Asli Gilang:
+%%    - a3 = abs(RF).^0.25 (Power compression 4th-root, meredam speckle noise)
+%%    - a4 = imgaussfilt(a3, 1.0) (Filter Gaussian halus, bebas bintik kasar)
+%% 2. Otomatis membaca dataset 'Probefix - Sebastian' (Full Array 128 Scanlines).
+%% 3. Menyimpan GAMBAR SATUAN (512x219 px) di dataset/images/.
+%% 4. Menyimpan GAMBAR GABUNGAN HORIZONTAL di dataset/horizontal_stitched_filmstrip/.
+%% 5. Menyimpan Matriks CSV & M-Mode Gilang di dataset/stitched_gilang/.
 %% =====================================================================
 
 clc; clear; close all;
 
 fprintf('=====================================================================\n');
-fprintf('     ULTRASOUND MASTER PREPROCESSOR (PROBEFIX - SEBASTIAN PIPELINE)  \n');
+fprintf('     MASTER PREPROCESSOR (METODE ASLI GILANG - BERSIH & BEBAS NOISE) \n');
 fprintf('=====================================================================\n\n');
 
 % -------------------------------------------------------------------------
@@ -26,7 +26,6 @@ project_root = fileparts(script_dir);
 parent_dir = fileparts(project_root);
 workspace_root = fileparts(parent_dir);
 
-% Deteksi folder 'Probefix - Sebastian'
 possible_sebastian = { ...
     fullfile(workspace_root, 'Probefix - Sebastian'), ...
     fullfile(parent_dir, 'Probefix - Sebastian'), ...
@@ -60,18 +59,12 @@ if ~exist(output_gilang_base, 'dir'), mkdir(output_gilang_base); end
 addpath(script_dir);
 
 % -------------------------------------------------------------------------
-% 2. PARAMETER TUNING HIGH-DEFINITION
+% 2. PARAMETER AKUSTIK & PEMROSESAN GILANG
 % -------------------------------------------------------------------------
-dr_dB         = 78.0;   % Dynamic Range (30 - 90 dB)
-gain_val      = 1.20;   % Gain Multiplier (0.5 - 3.0)
-rejection_pct = 8.0;    % Noise Rejection Clip % (0 - 25%)
-gamma_val     = 1.10;   % Gamma / Contrast S-Curve (0.5 - 2.0)
-sharpen_val   = 1.50;   % Unsharp Masking Texture Enhancement (0.0 - 4.0)
-clahe_limit   = 0.02;   % CLAHE Adaptive Contrast Limit (0.00 - 0.05)
-gauss_sigma   = 0.00;   % Gaussian Smoothing (0.00 = OFF)
-
-c_sound       = 1540;   % Kecepatan rambat suara pada jaringan otot (m/s)
+c_sound       = 1540;   % Kecepatan suara jaringan (m/s)
 target_height = 512;    % Tinggi resolusi gambar satuan (piksel)
+gauss_sigma   = 1.0;    % Gaussian smoothing alami ala Gilang
+power_exp     = 0.25;   % Power compression 0.25 (Peredam noise alami)
 
 manifest_rows = {};
 manifest_header = {'Subject', 'Trial_Name', 'Source_Bin', 'Slice_Index', 'Timestamp_Sec', 'Image_Rel_Path', 'Raw_Panorama_Rel_Path', 'Gilang_CSV_Rel_Path'};
@@ -79,7 +72,6 @@ manifest_header = {'Subject', 'Trial_Name', 'Source_Bin', 'Slice_Index', 'Timest
 total_all_slices = 0;
 total_all_panoramas = 0;
 
-% Cari seluruh file .bin secara rekursif
 bin_files_info = dir(fullfile(sebastian_dir, '**', '*.bin'));
 if isempty(bin_files_info)
     error('Tidak ditemukan file .bin di dalam %s', sebastian_dir);
@@ -93,7 +85,6 @@ fprintf('Ditemukan %d file .bin untuk diproses.\n\n', length(bin_files_info));
 for f_idx = 1:length(bin_files_info)
     bin_file_path = fullfile(bin_files_info(f_idx).folder, bin_files_info(f_idx).name);
     
-    % Ekstrak nama subject dari nama subfolder
     rel_folder = strrep(bin_files_info(f_idx).folder, sebastian_dir, '');
     rel_folder = regexprep(rel_folder, '^[\\/]+', '');
     if isempty(rel_folder)
@@ -152,12 +143,11 @@ for f_idx = 1:length(bin_files_info)
         
         raw_horizontal = zeros(num_samples, num_lines * num_slices, 'uint8');
         a2_gilang = zeros(num_samples, num_slices);
-        rej_norm = rejection_pct / 100.0;
         
         % ---------------------------------------------------------
-        % TAHAP 1: EKSTRAKSI GAMBAR SATUAN HIGH-DEFINITION
+        % EKSTRAKSI GAMBAR BERSIH (RUMUS ASLI GILANG)
         % ---------------------------------------------------------
-        fprintf('    [1/3] Mengekstrak %d slice satuan (512x%d px) ...\n', num_slices, target_width);
+        fprintf('    [1/3] Mengekstrak %d slice satuan bersih (512x%d px) ...\n', num_slices, target_width);
         
         for slice_idx = 1:num_slices
             rf_cell = RF_DATA{1, slice_idx};
@@ -166,45 +156,26 @@ for f_idx = 1:length(bin_files_info)
             % Kolom tengah untuk metode Gilang
             a2_gilang(:, slice_idx) = rf_cell(:, center_col);
             
-            % Demodulasi Envelope & Log-Compression
-            env = abs(hilbert(double(rf_cell)));
-            env_max = max(env(:));
-            if env_max == 0, env_max = 1; end
-            env_norm = (env / env_max) * gain_val;
+            % 1. Power Compression Asli Gilang
+            a3 = abs(double(rf_cell)).^power_exp;
+            a3_min = min(a3(:));
+            a3_max = max(a3(:));
+            a3_norm = (a3 - a3_min) / (a3_max - a3_min + eps);
             
-            env_dB = 20 * log10(env_norm + eps);
-            bmode = (env_dB + dr_dB) / dr_dB;
-            bmode = max(0, min(1, bmode));
+            % 2. Filter Gaussian 1.0 (Membersihkan noise dan bintik kasar)
+            a4 = imgaussfilt(a3_norm, gauss_sigma);
             
-            % Noise Rejection
-            if rej_norm > 0
-                bmode(bmode < rej_norm) = 0;
-                bmode = (bmode - rej_norm) / (1 - rej_norm + eps);
-                bmode = max(0, min(1, bmode));
-            end
+            % 3. Isotropic Scan Conversion (512 x 219 px)
+            bmode_iso = imresize(a4, [target_height, target_width], 'bicubic');
+            bmode_uint8 = uint8(bmode_iso * 255);
             
-            bmode = bmode.^gamma_val;
-            
-            % Simpan raw scanlines ke matriks gabungan horizontal
-            bmode_raw_uint8 = uint8(bmode * 255);
+            % Simpan raw untuk filmstrip
             col_start = (slice_idx - 1) * num_lines + 1;
             col_end   = slice_idx * num_lines;
-            raw_horizontal(:, col_start:col_end) = bmode_raw_uint8;
-            
-            % Isotropic Scaling untuk slice satuan (512x219 px)
-            bmode_iso = imresize(bmode, [target_height, target_width], 'bicubic');
-            
-            % Unsharp Masking & CLAHE (Optional HD enhancement)
-            if sharpen_val > 0
-                bmode_iso = imsharpen(bmode_iso, 'Radius', 1.5, 'Amount', sharpen_val);
-                bmode_iso = max(0, min(1, bmode_iso));
-            end
-            if clahe_limit > 0.001
-                bmode_iso = adapthisteq(bmode_iso, 'ClipLimit', clahe_limit, 'NumTiles', [8 8]);
-            end
+            raw_horizontal(:, col_start:col_end) = uint8(a4 * 255);
             
             img_filename = sprintf('frame_%04d.png', slice_idx);
-            imwrite(uint8(bmode_iso * 255), fullfile(trial_img_dir, img_filename));
+            imwrite(bmode_uint8, fullfile(trial_img_dir, img_filename));
             
             rel_img_path = fullfile('images', subject_name, trial_tag, img_filename);
             timestamp_sec = (slice_idx - 1) / fps;
@@ -218,7 +189,7 @@ for f_idx = 1:length(bin_files_info)
         end
         
         % ---------------------------------------------------------
-        % TAHAP 2: SIMPAN GAMBAR GABUNGAN HORIZONTAL
+        % SIMPAN PANORAMA FILMSTRIP & CSV
         % ---------------------------------------------------------
         pano_filename = sprintf('panorama_raw_%s.png', trial_tag);
         pano_filepath = fullfile(pano_cond_dir, pano_filename);
@@ -226,9 +197,6 @@ for f_idx = 1:length(bin_files_info)
         total_all_panoramas = total_all_panoramas + 1;
         fprintf('    [2/3] Panorama Filmstrip : %s (%d x %d px)\n', pano_filename, size(raw_horizontal, 2), size(raw_horizontal, 1));
         
-        % ---------------------------------------------------------
-        % TAHAP 3: SIMPAN DATA STITCHED & CSV METODE GILANG
-        % ---------------------------------------------------------
         csv_filename = sprintf('%s_%s.csv', subject_name, trial_tag);
         csvwrite(fullfile(gilang_cond_dir, csv_filename), a2_gilang);
         
@@ -237,7 +205,7 @@ for f_idx = 1:length(bin_files_info)
         p_low  = prctile(a3_gilang(:), 1.0);
         a3_norm = max(0, min(1, (a3_gilang - p_low) / (p_high - p_low + eps)));
         imwrite(uint8(a3_norm * 255), fullfile(gilang_cond_dir, sprintf('stitched_gilang_%s_%s.png', subject_name, trial_tag)));
-        fprintf('    [3/3] Matriks CSV Gilang : %s tersimpan\n\n', csv_fname);
+        fprintf('    [3/3] Matriks CSV Gilang : %s tersimpan\n\n', csv_filename);
         
     catch ME
         fprintf('    [Error] Gagal memproses %s: %s\n', bin_files_info(f_idx).name, ME.message);
