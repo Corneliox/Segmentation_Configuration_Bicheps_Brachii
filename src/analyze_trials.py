@@ -36,11 +36,12 @@ def analyze_all_trials(config_path="configs/config.yaml"):
         raise FileNotFoundError(f"Manifest not found at {manifest_path}. Please run convert_bin2dataset.m first.")
 
     manifest_df = pd.read_csv(manifest_path)
-    print(f"Loaded manifest with {len(manifest_df)} total frames across conditions: {manifest_df['Condition'].unique()}")
+    group_col = "Subject" if "Subject" in manifest_df.columns else "Condition"
+    print(f"Loaded manifest with {len(manifest_df)} total frames across groups: {manifest_df[group_col].unique()}")
 
     # Read spatial calibration (mm per pixel)
     calib_file = os.path.join(parent_dir, "dataset", "spatial_calibration.csv")
-    pixel_spacing_mm = 0.1113
+    pixel_spacing_mm = 0.1757
     if os.path.exists(calib_file):
         try:
             calib_df = pd.read_csv(calib_file)
@@ -64,8 +65,8 @@ def analyze_all_trials(config_path="configs/config.yaml"):
 
     results_records = []
 
-    # Group by Condition and Trial
-    grouped = manifest_df.groupby(["Condition", "Trial_Name"])
+    # Group by Subject/Condition and Trial
+    grouped = manifest_df.groupby([group_col, "Trial_Name"])
 
     print(f"\nAnalyzing {len(grouped)} unique acquisition trials...")
 
