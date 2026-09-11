@@ -17,6 +17,7 @@ Features:
 import os
 import glob
 import sys
+import time
 import yaml
 import threading
 import tkinter as tk
@@ -63,6 +64,8 @@ class InteractiveAnnotatorTk:
         self.model = build_model(self.cfg).to(self.device)
         self.is_trained = False
         self.is_training_now = False
+        self.is_navigating = False
+        self.last_key_time = 0.0
 
         if os.path.exists(self.model_checkpoint):
             try:
@@ -157,23 +160,23 @@ class InteractiveAnnotatorTk:
         btn_row = tk.Frame(bot_bar, bg="#1c1c1c")
         btn_row.pack(fill=tk.X, pady=(0, 6))
 
-        self.btn_prev = ttk.Button(btn_row, text="◀ Prev (P)", width=12, command=self.prev_frame)
+        self.btn_prev = ttk.Button(btn_row, text="◀ Prev (P)", width=12, command=self.prev_frame, takefocus=False)
         self.btn_prev.pack(side=tk.LEFT, padx=3)
 
-        self.btn_next = ttk.Button(btn_row, text="Confirm & Next ▶ (SPACE)", style="Accent.TButton", width=22, command=self.next_frame)
+        self.btn_next = ttk.Button(btn_row, text="Confirm & Next ▶ (SPACE)", style="Accent.TButton", width=22, command=self.next_frame, takefocus=False)
         self.btn_next.pack(side=tk.LEFT, padx=6)
 
         # Ghost / Onion Skin Controls
-        self.btn_ghost = ttk.Button(btn_row, text="👻 Ghost: ON (G)", style="GhostOn.TButton", width=16, command=self.toggle_ghost)
+        self.btn_ghost = ttk.Button(btn_row, text="👻 Ghost: ON (G)", style="GhostOn.TButton", width=16, command=self.toggle_ghost, takefocus=False)
         self.btn_ghost.pack(side=tk.LEFT, padx=4)
 
-        self.btn_copy = ttk.Button(btn_row, text="📋 Copy Ghost (K)", width=16, command=self.copy_prev_mask)
+        self.btn_copy = ttk.Button(btn_row, text="📋 Copy Ghost (K)", width=16, command=self.copy_prev_mask, takefocus=False)
         self.btn_copy.pack(side=tk.LEFT, padx=4)
 
-        self.btn_retrain = ttk.Button(btn_row, text="⚡ Retrain U-Net (T)", width=18, command=self.trigger_train_thread)
+        self.btn_retrain = ttk.Button(btn_row, text="⚡ Retrain U-Net (T)", width=18, command=self.trigger_train_thread, takefocus=False)
         self.btn_retrain.pack(side=tk.LEFT, padx=4)
 
-        self.btn_clear = ttk.Button(btn_row, text="🧹 Clear (C)", width=12, command=self.clear_mask)
+        self.btn_clear = ttk.Button(btn_row, text="🧹 Clear (C)", width=12, command=self.clear_mask, takefocus=False)
         self.btn_clear.pack(side=tk.LEFT, padx=4)
 
         # Brush size controls
@@ -207,21 +210,69 @@ class InteractiveAnnotatorTk:
         self.canvas.bind("<B3-Motion>", self.on_right_drag)
         self.canvas.bind("<ButtonRelease-3>", self.on_mouse_up)
 
-        self.root.bind("<space>", lambda e: self.next_frame())
-        self.root.bind("<Return>", lambda e: self.next_frame())
-        self.root.bind("<p>", lambda e: self.prev_frame())
-        self.root.bind("<P>", lambda e: self.prev_frame())
-        self.root.bind("<g>", lambda e: self.toggle_ghost())
-        self.root.bind("<G>", lambda e: self.toggle_ghost())
-        self.root.bind("<k>", lambda e: self.copy_prev_mask())
-        self.root.bind("<K>", lambda e: self.copy_prev_mask())
-        self.root.bind("<t>", lambda e: self.trigger_train_thread())
-        self.root.bind("<T>", lambda e: self.trigger_train_thread())
-        self.root.bind("<c>", lambda e: self.clear_mask())
-        self.root.bind("<C>", lambda e: self.clear_mask())
-        self.root.bind("<bracketleft>", lambda e: self.adjust_brush(-2))
-        self.root.bind("<bracketright>", lambda e: self.adjust_brush(2))
+        # Key bindings with 'break' to prevent event bubbling and double triggering
+        self.root.bind("<space>", lambda e: self.handle_key_nav(1))
+        self.root.bind("<Return>", lambda e: self.handle_key_nav(1))
+        self.root.bind("<p>", lambda e: self.handle_key_nav(-1))
+        self.root.bind("<P>", lambda e: self.handle_key_nav(-1))
+        self.root.bind("<g>", lambda e: self.handle_key_ghost())
+        self.root.bind("<G>", lambda e: self.handle_key_ghost())
+        self.root.bind("<k>", lambda e: self.handle_key_copy())
+        self.root.bind("<K>", lambda e: self.handle_key_copy())
+        self.root.bind("<t>", lambda e: self.handle_key_train())
+        self.root.bind("<T>", lambda e: self.handle_key_train())
+        self.root.bind("<c>", lambda e: self.handle_key_clear())
+        self.root.bind("<C>", lambda e: self.handle_key_clear())
+        self.root.bind("<bracketleft>", lambda e: self.handle_key_brush(-2))
+        self.root.bind("<bracketright>", lambda e: self.handle_key_brush(2))
         self.canvas.bind("<Configure>", lambda e: self.render_overlay())
+
+    def handle_key_nav(self, delta):
+        now = time.time()
+        if now - self.last_key_time < 0.20:
+            return "break"
+        self.last_key_time = now
+        if delta > 0:
+            self.next_frame()
+        else:
+            self.prev_frame()
+        return "break"
+
+    def handle_key_ghost(self):
+        now = time.time()
+        if now - self.last_key_time < 0.15:
+            return "break"
+        self.last_key_time = now
+        self.toggle_ghost()
+        return "break"
+
+    def handle_key_copy(self):
+        now = time.time()
+        if now - self.last_key_time < 0.15:
+            return "break"
+        self.last_key_time = now
+        self.copy_prev_mask()
+        return "break"
+
+    def handle_key_train(self):
+        now = time.time()
+        if now - self.last_key_time < 0.20:
+            return "break"
+        self.last_key_time = now
+        self.trigger_train_thread()
+        return "break"
+
+    def handle_key_clear(self):
+        now = time.time()
+        if now - self.last_key_time < 0.15:
+            return "break"
+        self.last_key_time = now
+        self.clear_mask()
+        return "break"
+
+    def handle_key_brush(self, delta):
+        self.adjust_brush(delta)
+        return "break"
 
     def adjust_brush(self, delta):
         self.brush_size = max(2, min(50, self.brush_size + delta))
@@ -394,31 +445,42 @@ class InteractiveAnnotatorTk:
         self.render_meta = (off_x, off_y, scale)
 
     def next_frame(self):
-        if not self.image_paths:
+        if not self.image_paths or self.is_navigating:
             return
 
-        # Save current mask
-        img_path = self.image_paths[self.current_idx]
-        rel_path = os.path.relpath(img_path, self.img_base)
-        mask_path = os.path.join(self.mask_base, rel_path)
-        os.makedirs(os.path.dirname(mask_path), exist_ok=True)
+        self.is_navigating = True
+        try:
+            # Save current mask
+            img_path = self.image_paths[self.current_idx]
+            rel_path = os.path.relpath(img_path, self.img_base)
+            mask_path = os.path.join(self.mask_base, rel_path)
+            os.makedirs(os.path.dirname(mask_path), exist_ok=True)
 
-        cv2.imwrite(mask_path, self.current_mask)
-        self.validated_count += 1
-        print(f"[{self.current_idx + 1}/{len(self.image_paths)}] ✓ Mask Tersimpan: {rel_path}")
+            cv2.imwrite(mask_path, self.current_mask)
+            self.validated_count += 1
+            print(f"[{self.current_idx + 1}/{len(self.image_paths)}] ✓ Mask Tersimpan: {rel_path}")
 
-        # Check auto-retrain trigger
-        if self.validated_count % self.auto_retrain_interval == 0:
-            self.trigger_train_thread()
+            # Check auto-retrain trigger
+            if self.validated_count % self.auto_retrain_interval == 0:
+                self.trigger_train_thread()
 
-        if self.current_idx < len(self.image_paths) - 1:
-            self.load_frame(self.current_idx + 1)
-        else:
-            messagebox.showinfo("Complete!", "Selamat! Seluruh frame telah selesai divalidasi.")
+            if self.current_idx < len(self.image_paths) - 1:
+                self.load_frame(self.current_idx + 1)
+            else:
+                messagebox.showinfo("Complete!", "Selamat! Seluruh frame telah selesai divalidasi.")
+        finally:
+            self.is_navigating = False
 
     def prev_frame(self):
-        if self.current_idx > 0:
-            self.load_frame(self.current_idx - 1)
+        if not self.image_paths or self.is_navigating:
+            return
+
+        self.is_navigating = True
+        try:
+            if self.current_idx > 0:
+                self.load_frame(self.current_idx - 1)
+        finally:
+            self.is_navigating = False
 
     def trigger_train_thread(self):
         if self.is_training_now:
