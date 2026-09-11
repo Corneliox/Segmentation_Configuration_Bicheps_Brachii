@@ -1,12 +1,16 @@
 """
 =====================================================================
 AI-ASSISTED INTERACTIVE ANNOTATOR (Tkinter Native GUI + PyTorch CUDA)
+With Adobe Animate-Style Onion Skinning (Ghost Layer)
 =====================================================================
-Semi-Automated Reinforcement Annotation Workflow:
-1. Native Tkinter GUI (Compatible with all OpenCV/Python versions).
+Features:
+1. Native Tkinter GUI (Zero OpenCV GUI compatibility issues).
 2. Live interactive brush/eraser for Biceps Brachii polygon/mask.
-3. On-demand or automatic incremental U-Net fine-tuning with GPU CUDA.
-4. Auto-proposal prediction for upcoming frames.
+3. Adobe Animate Ghost Layer (Onion Skin): displays frame t-1 mask as
+   a translucent amber/orange ghost to track motion and maintain consistency.
+4. Instant Ghost Copy ([K]): copy previous frame's mask to current frame.
+5. Continuous Active Learning: on-demand or auto incremental fine-tuning.
+6. Auto-proposal prediction for new frames via U-Net.
 =====================================================================
 """
 
@@ -17,7 +21,7 @@ import yaml
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
-from PIL import Image, ImageTk, ImageDraw
+from PIL import Image, ImageTk
 import cv2
 import numpy as np
 import torch
@@ -31,8 +35,8 @@ from src.utils import CombinedLoss
 class InteractiveAnnotatorTk:
     def __init__(self, root, config_path="configs/config.yaml"):
         self.root = root
-        self.root.title("AI-Assisted Interactive Annotator | Biceps Brachii")
-        self.root.geometry("1280x860")
+        self.root.title("AI-Assisted Interactive Annotator | Biceps Brachii (Onion Skin Edition)")
+        self.root.geometry("1320x880")
         self.root.configure(bg="#121212")
 
         # Bring window to front
@@ -69,13 +73,17 @@ class InteractiveAnnotatorTk:
             except Exception as e:
                 print(f"[WARNING] Gagal memuat bobot lama ({e}), memulai model baru...")
 
-        # Interactive states
+        # Interactive & Ghost States
         self.brush_size = 10
         self.drawing = False
         self.erasing = False
         self.current_idx = 0
         self.validated_count = 0
         self.auto_retrain_interval = 10
+
+        # Onion Skinning (Ghost Layer)
+        self.ghost_enabled = True
+        self.prev_mask = None
 
         self.image_paths = sorted(glob.glob(os.path.join(self.img_base, "**", "frame_*.png"), recursive=True))
         self.current_img_gray = None
@@ -101,22 +109,37 @@ class InteractiveAnnotatorTk:
         style.configure("Status.TLabel", background="#222222", foreground="#00e676", font=("Consolas", 10, "bold"))
         style.configure("TButton", background="#2c2c2c", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
         style.map("TButton", background=[("active", "#007acc")])
-        style.configure("Accent.TButton", background="#007acc", foreground="#ffffff", font=("Segoe UI", 10, "bold"))
+
+        # Accent buttons
+        style.configure("Accent.TButton", background="#007acc", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
         style.map("Accent.TButton", background=[("active", "#0098ff")])
+
+        # Ghost buttons
+        style.configure("GhostOn.TButton", background="#e65100", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
+        style.map("GhostOn.TButton", background=[("active", "#f57c00")])
+        style.configure("GhostOff.TButton", background="#333333", foreground="#888888", font=("Segoe UI", 9, "bold"))
+        style.map("GhostOff.TButton", background=[("active", "#444444")])
 
     def create_ui(self):
         # Master Layout: Top Control Bar, Center Canvas, Bottom Timeline & Shortcuts
         top_bar = tk.Frame(self.root, bg="#1c1c1c", height=50, padx=15, pady=8)
         top_bar.pack(side=tk.TOP, fill=tk.X)
 
-        self.lbl_title = ttk.Label(top_bar, text="🔬 AI-ASSISTED ANNOTATOR (ACTIVE LEARNING)", style="Header.TLabel")
-        self.lbl_title.pack(side=tk.LEFT, padx=(0, 20))
+        self.lbl_title = ttk.Label(top_bar, text="🔬 AI-ASSISTED ANNOTATOR (ONION SKIN)", style="Header.TLabel")
+        self.lbl_title.pack(side=tk.LEFT, padx=(0, 15))
 
         self.lbl_status = ttk.Label(top_bar, text="Status: Ready", style="Status.TLabel", padding=(10, 3))
         self.lbl_status.pack(side=tk.LEFT, padx=10)
 
-        self.lbl_device = ttk.Label(top_bar, text=f"Device: {self.device.type.upper()}", font=("Consolas", 9), foreground="#888888")
-        self.lbl_device.pack(side=tk.RIGHT, padx=10)
+        # Legend indicator
+        legend_frame = tk.Frame(top_bar, bg="#1c1c1c")
+        legend_frame.pack(side=tk.RIGHT, padx=10)
+        ttk.Label(legend_frame, text="🟢 Active Mask", foreground="#00e676", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        ttk.Label(legend_frame, text="|", foreground="#555555").pack(side=tk.LEFT, padx=3)
+        ttk.Label(legend_frame, text="🟠 Ghost (Frame t-1)", foreground="#ff9800", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        ttk.Label(legend_frame, text="|", foreground="#555555").pack(side=tk.LEFT, padx=3)
+        self.lbl_device = ttk.Label(legend_frame, text=f"GPU: {self.device.type.upper()}", font=("Consolas", 9), foreground="#888888")
+        self.lbl_device.pack(side=tk.LEFT, padx=5)
 
         # Center Display Frame
         center_frame = tk.Frame(self.root, bg="#0a0a0a")
@@ -134,17 +157,24 @@ class InteractiveAnnotatorTk:
         btn_row = tk.Frame(bot_bar, bg="#1c1c1c")
         btn_row.pack(fill=tk.X, pady=(0, 6))
 
-        self.btn_prev = ttk.Button(btn_row, text="◀ Prev Frame (P)", width=16, command=self.prev_frame)
+        self.btn_prev = ttk.Button(btn_row, text="◀ Prev (P)", width=12, command=self.prev_frame)
         self.btn_prev.pack(side=tk.LEFT, padx=3)
 
-        self.btn_next = ttk.Button(btn_row, text="Confirm & Next ▶ (SPACE)", style="Accent.TButton", width=25, command=self.next_frame)
-        self.btn_next.pack(side=tk.LEFT, padx=10)
+        self.btn_next = ttk.Button(btn_row, text="Confirm & Next ▶ (SPACE)", style="Accent.TButton", width=22, command=self.next_frame)
+        self.btn_next.pack(side=tk.LEFT, padx=6)
 
-        self.btn_retrain = ttk.Button(btn_row, text="⚡ Retrain U-Net Now (T)", width=22, command=self.trigger_train_thread)
-        self.btn_retrain.pack(side=tk.LEFT, padx=5)
+        # Ghost / Onion Skin Controls
+        self.btn_ghost = ttk.Button(btn_row, text="👻 Ghost: ON (G)", style="GhostOn.TButton", width=16, command=self.toggle_ghost)
+        self.btn_ghost.pack(side=tk.LEFT, padx=4)
 
-        self.btn_clear = ttk.Button(btn_row, text="🧹 Clear Mask (C)", width=16, command=self.clear_mask)
-        self.btn_clear.pack(side=tk.LEFT, padx=5)
+        self.btn_copy = ttk.Button(btn_row, text="📋 Copy Ghost (K)", width=16, command=self.copy_prev_mask)
+        self.btn_copy.pack(side=tk.LEFT, padx=4)
+
+        self.btn_retrain = ttk.Button(btn_row, text="⚡ Retrain U-Net (T)", width=18, command=self.trigger_train_thread)
+        self.btn_retrain.pack(side=tk.LEFT, padx=4)
+
+        self.btn_clear = ttk.Button(btn_row, text="🧹 Clear (C)", width=12, command=self.clear_mask)
+        self.btn_clear.pack(side=tk.LEFT, padx=4)
 
         # Brush size controls
         brush_frame = tk.Frame(btn_row, bg="#1c1c1c")
@@ -159,7 +189,7 @@ class InteractiveAnnotatorTk:
 
         self.lbl_hud = ttk.Label(
             hud_row, 
-            text="[Klik Kiri]: Gambar Area Biceps | [Klik Kanan]: Hapus | [SPACE]: Simpan & Lanjut | [T]: Latih U-Net | [C]: Hapus Mask",
+            text="[Klik Kiri]: Gambar | [Klik Kanan]: Hapus | [G]: Toggle Ghost | [K]: Salin Ghost Mask | [SPACE]: Simpan & Lanjut | [T]: Latih U-Net",
             font=("Segoe UI", 9), 
             foreground="#aaaaaa"
         )
@@ -181,6 +211,10 @@ class InteractiveAnnotatorTk:
         self.root.bind("<Return>", lambda e: self.next_frame())
         self.root.bind("<p>", lambda e: self.prev_frame())
         self.root.bind("<P>", lambda e: self.prev_frame())
+        self.root.bind("<g>", lambda e: self.toggle_ghost())
+        self.root.bind("<G>", lambda e: self.toggle_ghost())
+        self.root.bind("<k>", lambda e: self.copy_prev_mask())
+        self.root.bind("<K>", lambda e: self.copy_prev_mask())
         self.root.bind("<t>", lambda e: self.trigger_train_thread())
         self.root.bind("<T>", lambda e: self.trigger_train_thread())
         self.root.bind("<c>", lambda e: self.clear_mask())
@@ -192,6 +226,24 @@ class InteractiveAnnotatorTk:
     def adjust_brush(self, delta):
         self.brush_size = max(2, min(50, self.brush_size + delta))
         self.lbl_brush.config(text=f"{self.brush_size}px")
+
+    def toggle_ghost(self):
+        self.ghost_enabled = not self.ghost_enabled
+        if self.ghost_enabled:
+            self.btn_ghost.config(text="👻 Ghost: ON (G)", style="GhostOn.TButton")
+            self.lbl_status.config(text="Status: Ghost Layer ON (Onion Skin)", foreground="#ff9800")
+        else:
+            self.btn_ghost.config(text="👻 Ghost: OFF (G)", style="GhostOff.TButton")
+            self.lbl_status.config(text="Status: Ghost Layer OFF", foreground="#888888")
+        self.render_overlay()
+
+    def copy_prev_mask(self):
+        if self.prev_mask is not None and np.any(self.prev_mask > 0):
+            self.current_mask = self.prev_mask.copy()
+            self.lbl_status.config(text="Status: Mask Disalin dari Ghost (Frame t-1)", foreground="#ffd54f")
+            self.render_overlay()
+        else:
+            self.lbl_status.config(text="Status: Tidak ada Ghost mask pada frame sebelumnya", foreground="#ffb74d")
 
     def canvas_to_mask_coords(self, cx, cy):
         if not hasattr(self, 'render_meta') or self.render_meta is None:
@@ -249,9 +301,21 @@ class InteractiveAnnotatorTk:
 
         self.orig_h, self.orig_w = self.current_img_gray.shape
 
+        # Load Ghost Mask from previous frame (frame idx - 1)
+        if self.current_idx > 0:
+            prev_img_path = self.image_paths[self.current_idx - 1]
+            prev_rel = os.path.relpath(prev_img_path, self.img_base)
+            prev_mask_path = os.path.join(self.mask_base, prev_rel)
+            if os.path.exists(prev_mask_path):
+                self.prev_mask = cv2.imread(prev_mask_path, cv2.IMREAD_GRAYSCALE)
+            else:
+                self.prev_mask = None
+        else:
+            self.prev_mask = None
+
         if os.path.exists(mask_path):
             self.current_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-            self.lbl_status.config(text="Status: Validated Ground Truth (Edited)", foreground="#00e676")
+            self.lbl_status.config(text="Status: Validated Ground Truth (Saved)", foreground="#00e676")
         else:
             # Predict proposal with U-Net
             if self.is_trained:
@@ -259,7 +323,7 @@ class InteractiveAnnotatorTk:
                 self.lbl_status.config(text="Status: AI Auto-Proposal (Check & Confirm)", foreground="#00e5ff")
             else:
                 self.current_mask = np.zeros((self.orig_h, self.orig_w), dtype=np.uint8)
-                self.lbl_status.config(text="Status: Manual Cold-Start (Draw 5-10 frames to start AI)", foreground="#ffb74d")
+                self.lbl_status.config(text="Status: Manual Cold-Start (Draw or [K] Copy Ghost)", foreground="#ffb74d")
 
         self.lbl_progress.config(text=f"Frame {self.current_idx + 1}/{len(self.image_paths)}")
         self.render_overlay()
@@ -289,16 +353,29 @@ class InteractiveAnnotatorTk:
         c_h = max(50, self.canvas.winfo_height())
         if c_w < 100: c_w, c_h = 900, 650
 
-        # Build RGB display with transparent green overlay
+        # Build RGB display
         bgr = cv2.cvtColor(self.current_img_gray, cv2.COLOR_GRAY2BGR)
-        color_layer = np.zeros_like(bgr)
-        color_layer[:, :, 1] = self.current_mask  # Green mask
+        overlay = bgr.copy()
 
-        overlay = cv2.addWeighted(bgr, 0.75, color_layer, 0.35, 0)
-        
-        # Draw cyan outline contour
-        contours, _ = cv2.findContours(self.current_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(overlay, contours, -1, (0, 255, 255), 2)
+        # 1. GHOST LAYER (Frame t-1) in Warm Amber/Orange
+        if self.ghost_enabled and self.prev_mask is not None and np.any(self.prev_mask > 0):
+            ghost_layer = np.zeros_like(bgr)
+            ghost_layer[self.prev_mask > 0] = [0, 140, 255]  # Amber/Orange in BGR
+            overlay = cv2.addWeighted(overlay, 1.0, ghost_layer, 0.35, 0)
+
+            # Draw Ghost Contour (Amber/Orange line)
+            ghost_contours, _ = cv2.findContours(self.prev_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(overlay, ghost_contours, -1, (0, 140, 255), 2)
+
+        # 2. CURRENT ACTIVE MASK (Frame t) in Neon Green
+        if self.current_mask is not None and np.any(self.current_mask > 0):
+            curr_layer = np.zeros_like(bgr)
+            curr_layer[self.current_mask > 0] = [0, 255, 0]  # Neon Green
+            overlay = cv2.addWeighted(overlay, 1.0, curr_layer, 0.40, 0)
+
+            # Draw Current Contour (Cyan line)
+            curr_contours, _ = cv2.findContours(self.current_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(overlay, curr_contours, -1, (255, 255, 0), 2)
 
         # Scale to canvas
         scale = min(c_w / self.orig_w, c_h / self.orig_h)
