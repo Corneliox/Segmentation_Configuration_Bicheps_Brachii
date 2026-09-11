@@ -65,6 +65,7 @@ class InteractiveAnnotatorTk:
         self.is_trained = False
         self.is_training_now = False
         self.is_navigating = False
+        self.ai_proposal_enabled = True
         self.last_key_time = 0.0
 
         if os.path.exists(self.model_checkpoint):
@@ -98,10 +99,38 @@ class InteractiveAnnotatorTk:
         self.create_ui()
         self.bind_events()
 
+        # Count existing valid masks
+        valid_masks = self.count_valid_masks()
+        if valid_masks >= 2:
+            self.is_trained = True
+            self.lbl_ai_indicator.config(text=f"🤖 U-Net: READY ({valid_masks} masks)", foreground="#00e676")
+
         if self.image_paths:
-            self.load_frame(0)
+            # Auto-resume to first unannotated or blank frame
+            start_idx = self.find_first_unannotated_idx()
+            self.load_frame(start_idx)
         else:
             messagebox.showwarning("No Images", f"Tidak ada frame ditemukan di:\n{self.img_base}")
+
+    def count_valid_masks(self):
+        count = 0
+        mask_files = glob.glob(os.path.join(self.mask_base, "**", "frame_*.png"), recursive=True)
+        for mf in mask_files:
+            m = cv2.imread(mf, cv2.IMREAD_GRAYSCALE)
+            if m is not None and np.count_nonzero(m) > 0:
+                count += 1
+        return count
+
+    def find_first_unannotated_idx(self):
+        for idx, p in enumerate(self.image_paths):
+            rel = os.path.relpath(p, self.img_base)
+            mf = os.path.join(self.mask_base, rel)
+            if not os.path.exists(mf):
+                return idx
+            m = cv2.imread(mf, cv2.IMREAD_GRAYSCALE)
+            if m is None or np.count_nonzero(m) == 0:
+                return idx
+        return 0
 
     def setup_styles(self):
         style = ttk.Style()
@@ -117,6 +146,10 @@ class InteractiveAnnotatorTk:
         style.configure("Accent.TButton", background="#007acc", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
         style.map("Accent.TButton", background=[("active", "#0098ff")])
 
+        # AI Predict Button
+        style.configure("AIPredict.TButton", background="#6a1b9a", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
+        style.map("AIPredict.TButton", background=[("active", "#8e24aa")])
+
         # Ghost buttons
         style.configure("GhostOn.TButton", background="#e65100", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
         style.map("GhostOn.TButton", background=[("active", "#f57c00")])
@@ -128,11 +161,14 @@ class InteractiveAnnotatorTk:
         top_bar = tk.Frame(self.root, bg="#1c1c1c", height=50, padx=15, pady=8)
         top_bar.pack(side=tk.TOP, fill=tk.X)
 
-        self.lbl_title = ttk.Label(top_bar, text="🔬 AI-ASSISTED ANNOTATOR (ONION SKIN)", style="Header.TLabel")
+        self.lbl_title = ttk.Label(top_bar, text="🔬 AI-ASSISTED ANNOTATOR (ACTIVE U-NET)", style="Header.TLabel")
         self.lbl_title.pack(side=tk.LEFT, padx=(0, 15))
 
         self.lbl_status = ttk.Label(top_bar, text="Status: Ready", style="Status.TLabel", padding=(10, 3))
         self.lbl_status.pack(side=tk.LEFT, padx=10)
+
+        self.lbl_ai_indicator = ttk.Label(top_bar, text="🤖 U-Net: Initializing...", font=("Consolas", 10, "bold"), foreground="#00e5ff")
+        self.lbl_ai_indicator.pack(side=tk.LEFT, padx=10)
 
         # Legend indicator
         legend_frame = tk.Frame(top_bar, bg="#1c1c1c")
@@ -160,24 +196,30 @@ class InteractiveAnnotatorTk:
         btn_row = tk.Frame(bot_bar, bg="#1c1c1c")
         btn_row.pack(fill=tk.X, pady=(0, 6))
 
-        self.btn_prev = ttk.Button(btn_row, text="◀ Prev (P)", width=12, command=self.prev_frame, takefocus=False)
-        self.btn_prev.pack(side=tk.LEFT, padx=3)
+        self.btn_prev = ttk.Button(btn_row, text="◀ Prev (P)", width=10, command=self.prev_frame, takefocus=False)
+        self.btn_prev.pack(side=tk.LEFT, padx=2)
 
         self.btn_next = ttk.Button(btn_row, text="Confirm & Next ▶ (SPACE)", style="Accent.TButton", width=22, command=self.next_frame, takefocus=False)
-        self.btn_next.pack(side=tk.LEFT, padx=6)
+        self.btn_next.pack(side=tk.LEFT, padx=5)
+
+        self.btn_predict = ttk.Button(btn_row, text="🔮 Predict AI (U)", style="AIPredict.TButton", width=14, command=self.manual_predict, takefocus=False)
+        self.btn_predict.pack(side=tk.LEFT, padx=3)
+
+        self.btn_jump = ttk.Button(btn_row, text="⏭ Next Unlabeled (J)", width=17, command=self.jump_next_unannotated, takefocus=False)
+        self.btn_jump.pack(side=tk.LEFT, padx=3)
 
         # Ghost / Onion Skin Controls
-        self.btn_ghost = ttk.Button(btn_row, text="👻 Ghost: ON (G)", style="GhostOn.TButton", width=16, command=self.toggle_ghost, takefocus=False)
-        self.btn_ghost.pack(side=tk.LEFT, padx=4)
+        self.btn_ghost = ttk.Button(btn_row, text="👻 Ghost: ON (G)", style="GhostOn.TButton", width=14, command=self.toggle_ghost, takefocus=False)
+        self.btn_ghost.pack(side=tk.LEFT, padx=3)
 
-        self.btn_copy = ttk.Button(btn_row, text="📋 Copy Ghost (K)", width=16, command=self.copy_prev_mask, takefocus=False)
-        self.btn_copy.pack(side=tk.LEFT, padx=4)
+        self.btn_copy = ttk.Button(btn_row, text="📋 Copy Ghost (K)", width=14, command=self.copy_prev_mask, takefocus=False)
+        self.btn_copy.pack(side=tk.LEFT, padx=3)
 
-        self.btn_retrain = ttk.Button(btn_row, text="⚡ Retrain U-Net (T)", width=18, command=self.trigger_train_thread, takefocus=False)
-        self.btn_retrain.pack(side=tk.LEFT, padx=4)
+        self.btn_retrain = ttk.Button(btn_row, text="⚡ Train U-Net (T)", width=15, command=self.trigger_train_thread, takefocus=False)
+        self.btn_retrain.pack(side=tk.LEFT, padx=3)
 
-        self.btn_clear = ttk.Button(btn_row, text="🧹 Clear (C)", width=12, command=self.clear_mask, takefocus=False)
-        self.btn_clear.pack(side=tk.LEFT, padx=4)
+        self.btn_clear = ttk.Button(btn_row, text="🧹 Clear (C)", width=10, command=self.clear_mask, takefocus=False)
+        self.btn_clear.pack(side=tk.LEFT, padx=3)
 
         # Brush size controls
         brush_frame = tk.Frame(btn_row, bg="#1c1c1c")
@@ -192,7 +234,7 @@ class InteractiveAnnotatorTk:
 
         self.lbl_hud = ttk.Label(
             hud_row, 
-            text="[Klik Kiri]: Gambar | [Klik Kanan]: Hapus | [G]: Toggle Ghost | [K]: Salin Ghost Mask | [SPACE]: Simpan & Lanjut | [T]: Latih U-Net",
+            text="[Klik Kiri]: Gambar | [Klik Kanan]: Hapus | [SPACE]: Simpan & Lanjut | [U]: Prediksi U-Net | [K]: Salin Ghost | [J]: Loncat Frame Baru | [G]: Ghost ON/OFF",
             font=("Segoe UI", 9), 
             foreground="#aaaaaa"
         )
@@ -215,6 +257,10 @@ class InteractiveAnnotatorTk:
         self.root.bind("<Return>", lambda e: self.handle_key_nav(1))
         self.root.bind("<p>", lambda e: self.handle_key_nav(-1))
         self.root.bind("<P>", lambda e: self.handle_key_nav(-1))
+        self.root.bind("<u>", lambda e: self.handle_key_predict())
+        self.root.bind("<U>", lambda e: self.handle_key_predict())
+        self.root.bind("<j>", lambda e: self.handle_key_jump())
+        self.root.bind("<J>", lambda e: self.handle_key_jump())
         self.root.bind("<g>", lambda e: self.handle_key_ghost())
         self.root.bind("<G>", lambda e: self.handle_key_ghost())
         self.root.bind("<k>", lambda e: self.handle_key_copy())
@@ -236,6 +282,22 @@ class InteractiveAnnotatorTk:
             self.next_frame()
         else:
             self.prev_frame()
+        return "break"
+
+    def handle_key_predict(self):
+        now = time.time()
+        if now - self.last_key_time < 0.20:
+            return "break"
+        self.last_key_time = now
+        self.manual_predict()
+        return "break"
+
+    def handle_key_jump(self):
+        now = time.time()
+        if now - self.last_key_time < 0.20:
+            return "break"
+        self.last_key_time = now
+        self.jump_next_unannotated()
         return "break"
 
     def handle_key_ghost(self):
@@ -295,6 +357,40 @@ class InteractiveAnnotatorTk:
             self.render_overlay()
         else:
             self.lbl_status.config(text="Status: Tidak ada Ghost mask pada frame sebelumnya", foreground="#ffb74d")
+
+    def manual_predict(self):
+        if self.current_img_gray is None:
+            return
+        if not self.is_trained:
+            if os.path.exists(self.model_checkpoint):
+                try:
+                    ckpt = torch.load(self.model_checkpoint, map_location=self.device)
+                    self.model.load_state_dict(ckpt["model_state_dict"] if "model_state_dict" in ckpt else ckpt)
+                    self.is_trained = True
+                except Exception:
+                    pass
+        if self.is_trained:
+            self.current_mask = self.predict_unet(self.current_img_gray)
+            self.lbl_status.config(text="Status: 🔮 AI Proposal Dihasilkan (U-Net)", foreground="#00e5ff")
+            self.render_overlay()
+        else:
+            messagebox.showwarning("U-Net Belum Siap", "U-Net belum memiliki bobot terlatih.\nSilakan anotasi minimal 5-10 frame terlebih dahulu!")
+
+    def jump_next_unannotated(self):
+        if not self.image_paths:
+            return
+        for i in range(self.current_idx + 1, len(self.image_paths)):
+            p = self.image_paths[i]
+            rel = os.path.relpath(p, self.img_base)
+            mf = os.path.join(self.mask_base, rel)
+            if not os.path.exists(mf):
+                self.load_frame(i)
+                return
+            m = cv2.imread(mf, cv2.IMREAD_GRAYSCALE)
+            if m is None or np.count_nonzero(m) == 0:
+                self.load_frame(i)
+                return
+        messagebox.showinfo("Selesai", "Semua frame telah memiliki anotasi valid!")
 
     def canvas_to_mask_coords(self, cx, cy):
         if not hasattr(self, 'render_meta') or self.render_meta is None:
@@ -358,23 +454,29 @@ class InteractiveAnnotatorTk:
             prev_rel = os.path.relpath(prev_img_path, self.img_base)
             prev_mask_path = os.path.join(self.mask_base, prev_rel)
             if os.path.exists(prev_mask_path):
-                self.prev_mask = cv2.imread(prev_mask_path, cv2.IMREAD_GRAYSCALE)
+                pm = cv2.imread(prev_mask_path, cv2.IMREAD_GRAYSCALE)
+                self.prev_mask = pm if (pm is not None and np.count_nonzero(pm) > 0) else None
             else:
                 self.prev_mask = None
         else:
             self.prev_mask = None
 
+        has_valid_saved_mask = False
         if os.path.exists(mask_path):
-            self.current_mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-            self.lbl_status.config(text="Status: Validated Ground Truth (Saved)", foreground="#00e676")
-        else:
+            saved_m = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+            if saved_m is not None and np.count_nonzero(saved_m) > 0:
+                self.current_mask = saved_m
+                has_valid_saved_mask = True
+                self.lbl_status.config(text="Status: Validated Ground Truth (Saved)", foreground="#00e676")
+
+        if not has_valid_saved_mask:
             # Predict proposal with U-Net
-            if self.is_trained:
+            if self.is_trained and self.ai_proposal_enabled:
                 self.current_mask = self.predict_unet(self.current_img_gray)
-                self.lbl_status.config(text="Status: AI Auto-Proposal (Check & Confirm)", foreground="#00e5ff")
+                self.lbl_status.config(text="Status: 🤖 AI Auto-Proposal (Check & Confirm)", foreground="#00e5ff")
             else:
                 self.current_mask = np.zeros((self.orig_h, self.orig_w), dtype=np.uint8)
-                self.lbl_status.config(text="Status: Manual Cold-Start (Draw or [K] Copy Ghost)", foreground="#ffb74d")
+                self.lbl_status.config(text="Status: Manual Cold-Start (Draw / [U] Predict AI)", foreground="#ffb74d")
 
         self.lbl_progress.config(text=f"Frame {self.current_idx + 1}/{len(self.image_paths)}")
         self.render_overlay()
@@ -507,11 +609,12 @@ class InteractiveAnnotatorTk:
             if os.path.exists(img_path):
                 img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
                 msk = cv2.imread(mf, cv2.IMREAD_GRAYSCALE)
-                if img is not None and msk is not None:
+                if img is not None and msk is not None and np.count_nonzero(msk) > 0:
                     train_samples.append((img, msk))
 
         if not train_samples:
             self.is_training_now = False
+            self.lbl_status.config(text="Status: Tidak ada mask valid (>0 px) untuk training", foreground="#ffb74d")
             return
 
         self.model.train()
@@ -547,9 +650,10 @@ class InteractiveAnnotatorTk:
         torch.save({"model_state_dict": self.model.state_dict()}, self.model_checkpoint)
         torch.save({"model_state_dict": self.model.state_dict()}, os.path.join(self.weights_dir, "best_model.pth"))
 
-        print(f"✓ [OK] U-Net Model Updated! (Loss: {total_loss/len(train_samples):.4f})\n")
+        print(f"✓ [OK] U-Net Model Updated! ({len(train_samples)} masks, Loss: {total_loss/len(train_samples):.4f})\n")
         self.is_training_now = False
         self.lbl_status.config(text="Status: U-Net Model Updated! (Active)", foreground="#00e676")
+        self.lbl_ai_indicator.config(text=f"🤖 U-Net: READY ({len(train_samples)} masks)", foreground="#00e676")
 
 
 def main():
