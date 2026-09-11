@@ -37,3 +37,7 @@ ENV/
 # OS specific files
 .DS_Store
 Thumbs.db
+
+# Roboflow Anonymization Credentials & Temporary Folders
+local_credentials_mapping.*
+temp_anonymized_upload/
