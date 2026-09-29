@@ -1,16 +1,19 @@
 """
 =====================================================================
 AI-ASSISTED INTERACTIVE ANNOTATOR (Tkinter Native GUI + PyTorch CUDA)
-With Adobe Animate-Style Onion Skinning (Ghost Layer)
+With Dual-Viewport: 3-Frame Raw Temporal Filmstrip + Ghost Studio
 =====================================================================
 Features:
-1. Native Tkinter GUI (Zero OpenCV GUI compatibility issues).
-2. Live interactive brush/eraser for Biceps Brachii polygon/mask.
-3. Adobe Animate Ghost Layer (Onion Skin): displays frame t-1 mask as
+1. Dual Viewports:
+   - Left Viewport: 3-frame raw temporal filmstrip [Frame n-1 (Past), Frame n (Current), Frame n+1 (Future)]
+     providing continuous muscle motion and anatomical context.
+   - Right Viewport: Interactive annotation studio with Onion Skinning (Ghost Layer from Frame n-1)
+     and real-time brush/eraser tools.
+2. Adobe Animate Ghost Layer (Onion Skin): displays frame n-1 mask as
    a translucent amber/orange ghost to track motion and maintain consistency.
-4. Instant Ghost Copy ([K]): copy previous frame's mask to current frame.
-5. Continuous Active Learning: on-demand or auto incremental fine-tuning.
-6. Auto-proposal prediction for new frames via U-Net.
+3. Instant Ghost Copy ([K]): copy previous frame's mask to current frame.
+4. Continuous Active Learning: on-demand or auto incremental fine-tuning (U-Net).
+5. Auto-proposal prediction for new frames via U-Net.
 =====================================================================
 """
 
@@ -36,8 +39,8 @@ from src.utils import CombinedLoss
 class InteractiveAnnotatorTk:
     def __init__(self, root, config_path="configs/config.yaml"):
         self.root = root
-        self.root.title("AI-Assisted Interactive Annotator | Biceps Brachii (Onion Skin Edition)")
-        self.root.geometry("1320x880")
+        self.root.title("AI-Assisted Interactive Annotator | Dual-Viewport (Temporal Filmstrip + Ghost Studio)")
+        self.root.geometry("1580x900")
         self.root.configure(bg="#121212")
 
         # Bring window to front
@@ -95,6 +98,11 @@ class InteractiveAnnotatorTk:
         self.orig_h = 512
         self.orig_w = 219
 
+        # Cached PhotoImages to prevent garbage collection
+        self.tk_carousel_img = None
+        self.tk_canvas_img = None
+        self.render_meta = None
+
         self.setup_styles()
         self.create_ui()
         self.bind_events()
@@ -139,6 +147,7 @@ class InteractiveAnnotatorTk:
         style.configure("TLabel", background="#181818", foreground="#e0e0e0", font=("Segoe UI", 9))
         style.configure("Header.TLabel", background="#181818", foreground="#00e5ff", font=("Segoe UI", 11, "bold"))
         style.configure("Status.TLabel", background="#222222", foreground="#00e676", font=("Consolas", 10, "bold"))
+        style.configure("PanelHeader.TLabel", background="#252525", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
         style.configure("TButton", background="#2c2c2c", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
         style.map("TButton", background=[("active", "#007acc")])
 
@@ -157,8 +166,8 @@ class InteractiveAnnotatorTk:
         style.map("GhostOff.TButton", background=[("active", "#444444")])
 
     def create_ui(self):
-        # Master Layout: Top Control Bar, Center Canvas, Bottom Timeline & Shortcuts
-        top_bar = tk.Frame(self.root, bg="#1c1c1c", height=50, padx=15, pady=8)
+        # 1. Top Bar
+        top_bar = tk.Frame(self.root, bg="#1c1c1c", height=48, padx=15, pady=6)
         top_bar.pack(side=tk.TOP, fill=tk.X)
 
         self.lbl_title = ttk.Label(top_bar, text="🔬 AI-ASSISTED ANNOTATOR (ACTIVE U-NET)", style="Header.TLabel")
@@ -175,31 +184,63 @@ class InteractiveAnnotatorTk:
         legend_frame.pack(side=tk.RIGHT, padx=10)
         ttk.Label(legend_frame, text="🟢 Active Mask", foreground="#00e676", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=5)
         ttk.Label(legend_frame, text="|", foreground="#555555").pack(side=tk.LEFT, padx=3)
-        ttk.Label(legend_frame, text="🟠 Ghost (Frame t-1)", foreground="#ff9800", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        ttk.Label(legend_frame, text="🟠 Ghost (n-1)", foreground="#ff9800", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=5)
+        ttk.Label(legend_frame, text="|", foreground="#555555").pack(side=tk.LEFT, padx=3)
+        ttk.Label(legend_frame, text="🔲 Raw Filmstrip", foreground="#00e5ff", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=5)
         ttk.Label(legend_frame, text="|", foreground="#555555").pack(side=tk.LEFT, padx=3)
         self.lbl_device = ttk.Label(legend_frame, text=f"GPU: {self.device.type.upper()}", font=("Consolas", 9), foreground="#888888")
         self.lbl_device.pack(side=tk.LEFT, padx=5)
 
-        # Center Display Frame
-        center_frame = tk.Frame(self.root, bg="#0a0a0a")
-        center_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # 2. Dual-Viewport Center Area
+        center_container = tk.Frame(self.root, bg="#0a0a0a")
+        center_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=4)
 
-        # Canvas for Interactive Drawing
-        self.canvas = tk.Canvas(center_frame, bg="#000000", highlightthickness=0, cursor="crosshair")
+        # Left Viewport: Raw Temporal Filmstrip (Frames n-1, n, n+1)
+        left_frame = tk.Frame(center_container, bg="#141414", highlightbackground="#2a2a2a", highlightthickness=1)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
+
+        left_header = tk.Frame(left_frame, bg="#202020", padx=10, pady=5)
+        left_header.pack(side=tk.TOP, fill=tk.X)
+        self.lbl_left_title = ttk.Label(
+            left_header, 
+            text="🎞️ TEMPORAL FILMSTRIP [Frame n-1 (Past) | Frame n (Current) | Frame n+1 (Future)]", 
+            font=("Segoe UI", 9, "bold"),
+            foreground="#00e5ff"
+        )
+        self.lbl_left_title.pack(side=tk.LEFT)
+
+        self.canvas_carousel = tk.Canvas(left_frame, bg="#050505", highlightthickness=0)
+        self.canvas_carousel.pack(fill=tk.BOTH, expand=True)
+
+        # Right Viewport: Interactive Annotation Studio + Ghost Overlay
+        right_frame = tk.Frame(center_container, bg="#141414", highlightbackground="#2a2a2a", highlightthickness=1)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(4, 0))
+
+        right_header = tk.Frame(right_frame, bg="#202020", padx=10, pady=5)
+        right_header.pack(side=tk.TOP, fill=tk.X)
+        self.lbl_right_title = ttk.Label(
+            right_header, 
+            text="✏️ INTERACTIVE STUDIO [Active Frame n Mask (Green) + Ghost n-1 (Amber)]", 
+            font=("Segoe UI", 9, "bold"),
+            foreground="#00e676"
+        )
+        self.lbl_right_title.pack(side=tk.LEFT)
+
+        self.canvas = tk.Canvas(right_frame, bg="#050505", highlightthickness=0, cursor="crosshair")
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        # Bottom Control Panel
-        bot_bar = tk.Frame(self.root, bg="#1c1c1c", padx=15, pady=10)
+        # 3. Bottom Control Panel
+        bot_bar = tk.Frame(self.root, bg="#1c1c1c", padx=15, pady=8)
         bot_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
         # Row 1: Actions & Navigation Buttons
         btn_row = tk.Frame(bot_bar, bg="#1c1c1c")
-        btn_row.pack(fill=tk.X, pady=(0, 6))
+        btn_row.pack(fill=tk.X, pady=(0, 5))
 
-        self.btn_prev = ttk.Button(btn_row, text="◀ Prev (P)", width=10, command=self.prev_frame, takefocus=False)
+        self.btn_prev = ttk.Button(btn_row, text="◀ Prev (Q)", width=10, command=self.prev_frame, takefocus=False)
         self.btn_prev.pack(side=tk.LEFT, padx=2)
 
-        self.btn_next = ttk.Button(btn_row, text="Confirm & Next ▶ (SPACE)", style="Accent.TButton", width=22, command=self.next_frame, takefocus=False)
+        self.btn_next = ttk.Button(btn_row, text="Confirm & Next ▶ (W / SPACE)", style="Accent.TButton", width=25, command=self.next_frame, takefocus=False)
         self.btn_next.pack(side=tk.LEFT, padx=5)
 
         self.btn_predict = ttk.Button(btn_row, text="🔮 Predict AI (U)", style="AIPredict.TButton", width=14, command=self.manual_predict, takefocus=False)
@@ -234,7 +275,7 @@ class InteractiveAnnotatorTk:
 
         self.lbl_hud = ttk.Label(
             hud_row, 
-            text="[Klik Kiri]: Gambar | [Klik Kanan]: Hapus | [SPACE]: Simpan & Lanjut | [U]: Prediksi U-Net | [K]: Salin Ghost | [J]: Loncat Frame Baru | [G]: Ghost ON/OFF",
+            text="[Klik Kiri]: Gambar Mask | [Klik Kanan]: Hapus Mask | [W / SPACE]: Simpan & Lanjut | [Q]: Prev | [U]: U-Net Predict | [K]: Copy Ghost | [G]: Ghost ON/OFF | [J]: Loncat Frame Baru",
             font=("Segoe UI", 9), 
             foreground="#aaaaaa"
         )
@@ -255,6 +296,10 @@ class InteractiveAnnotatorTk:
         # Key bindings with 'break' to prevent event bubbling and double triggering
         self.root.bind("<space>", lambda e: self.handle_key_nav(1))
         self.root.bind("<Return>", lambda e: self.handle_key_nav(1))
+        self.root.bind("<w>", lambda e: self.handle_key_nav(1))
+        self.root.bind("<W>", lambda e: self.handle_key_nav(1))
+        self.root.bind("<q>", lambda e: self.handle_key_nav(-1))
+        self.root.bind("<Q>", lambda e: self.handle_key_nav(-1))
         self.root.bind("<p>", lambda e: self.handle_key_nav(-1))
         self.root.bind("<P>", lambda e: self.handle_key_nav(-1))
         self.root.bind("<u>", lambda e: self.handle_key_predict())
@@ -271,7 +316,10 @@ class InteractiveAnnotatorTk:
         self.root.bind("<C>", lambda e: self.handle_key_clear())
         self.root.bind("<bracketleft>", lambda e: self.handle_key_brush(-2))
         self.root.bind("<bracketright>", lambda e: self.handle_key_brush(2))
+
+        # Dynamic Canvas Resize
         self.canvas.bind("<Configure>", lambda e: self.render_overlay())
+        self.canvas_carousel.bind("<Configure>", lambda e: self.render_context_carousel())
 
     def handle_key_nav(self, delta):
         now = time.time()
@@ -353,7 +401,7 @@ class InteractiveAnnotatorTk:
     def copy_prev_mask(self):
         if self.prev_mask is not None and np.any(self.prev_mask > 0):
             self.current_mask = self.prev_mask.copy()
-            self.lbl_status.config(text="Status: Mask Disalin dari Ghost (Frame t-1)", foreground="#ffd54f")
+            self.lbl_status.config(text="Status: Mask Disalin dari Ghost (Frame n-1)", foreground="#ffd54f")
             self.render_overlay()
         else:
             self.lbl_status.config(text="Status: Tidak ada Ghost mask pada frame sebelumnya", foreground="#ffb74d")
@@ -479,6 +527,7 @@ class InteractiveAnnotatorTk:
                 self.lbl_status.config(text="Status: Manual Cold-Start (Draw / [U] Predict AI)", foreground="#ffb74d")
 
         self.lbl_progress.config(text=f"Frame {self.current_idx + 1}/{len(self.image_paths)}")
+        self.render_context_carousel()
         self.render_overlay()
 
     def predict_unet(self, img_gray):
@@ -498,19 +547,92 @@ class InteractiveAnnotatorTk:
 
         return cv2.resize(bin_mask, (w, h), interpolation=cv2.INTER_NEAREST)
 
+    def render_context_carousel(self):
+        """
+        Renders the 3-frame raw temporal filmstrip side-by-side:
+        [Frame n-1 (Past Raw) | Frame n (Current Raw Highlighted) | Frame n+1 (Future Raw)]
+        """
+        if not self.image_paths or self.current_img_gray is None:
+            return
+
+        c_w = max(50, self.canvas_carousel.winfo_width())
+        c_h = max(50, self.canvas_carousel.winfo_height())
+        if c_w < 100: c_w, c_h = 750, 650
+
+        # Frame n-1 (Past)
+        if self.current_idx > 0:
+            past_path = self.image_paths[self.current_idx - 1]
+            past_img = cv2.imread(past_path, cv2.IMREAD_GRAYSCALE)
+            if past_img is not None:
+                past_bgr = cv2.cvtColor(past_img, cv2.COLOR_GRAY2BGR)
+            else:
+                past_bgr = np.zeros((self.orig_h, self.orig_w, 3), dtype=np.uint8)
+            # Badge
+            cv2.rectangle(past_bgr, (0, 0), (self.orig_w, 24), (20, 20, 20), -1)
+            cv2.putText(past_bgr, f"n-1 (Frame {self.current_idx})", (6, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 160, 160), 1, cv2.LINE_AA)
+        else:
+            past_bgr = np.zeros((self.orig_h, self.orig_w, 3), dtype=np.uint8)
+            cv2.putText(past_bgr, "[START]", (self.orig_w // 2 - 35, self.orig_h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 100, 100), 1, cv2.LINE_AA)
+
+        # Frame n (Current Raw with Cyan Highlight Border)
+        curr_bgr = cv2.cvtColor(self.current_img_gray, cv2.COLOR_GRAY2BGR)
+        cv2.rectangle(curr_bgr, (0, 0), (self.orig_w - 1, self.orig_h - 1), (255, 255, 0), 2)  # Cyan border
+        cv2.rectangle(curr_bgr, (0, 0), (self.orig_w, 24), (0, 120, 150), -1)
+        cv2.putText(curr_bgr, f"* n (Frame {self.current_idx + 1}) *", (6, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Frame n+1 (Future)
+        if self.current_idx < len(self.image_paths) - 1:
+            future_path = self.image_paths[self.current_idx + 1]
+            future_img = cv2.imread(future_path, cv2.IMREAD_GRAYSCALE)
+            if future_img is not None:
+                future_bgr = cv2.cvtColor(future_img, cv2.COLOR_GRAY2BGR)
+            else:
+                future_bgr = np.zeros((self.orig_h, self.orig_w, 3), dtype=np.uint8)
+            # Badge
+            cv2.rectangle(future_bgr, (0, 0), (self.orig_w, 24), (20, 20, 20), -1)
+            cv2.putText(future_bgr, f"n+1 (Frame {self.current_idx + 2})", (6, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 160, 160), 1, cv2.LINE_AA)
+        else:
+            future_bgr = np.zeros((self.orig_h, self.orig_w, 3), dtype=np.uint8)
+            cv2.putText(future_bgr, "[END]", (self.orig_w // 2 - 25, self.orig_h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 100, 100), 1, cv2.LINE_AA)
+
+        # 4px Divider column
+        divider = np.full((self.orig_h, 4, 3), 40, dtype=np.uint8)
+
+        # Stitch horizontally
+        filmstrip = np.hstack([past_bgr, divider, curr_bgr, divider, future_bgr])
+        fh, fw = filmstrip.shape[:2]
+
+        scale = min(c_w / fw, c_h / fh)
+        disp_w = max(1, int(fw * scale))
+        disp_h = max(1, int(fh * scale))
+
+        disp_resized = cv2.resize(filmstrip, (disp_w, disp_h), interpolation=cv2.INTER_LINEAR)
+        img_pil = Image.fromarray(cv2.cvtColor(disp_resized, cv2.COLOR_BGR2RGB))
+        self.tk_carousel_img = ImageTk.PhotoImage(img_pil)
+
+        self.canvas_carousel.delete("all")
+        off_x = (c_w - disp_w) // 2
+        off_y = (c_h - disp_h) // 2
+        self.canvas_carousel.create_image(off_x, off_y, anchor=tk.NW, image=self.tk_carousel_img)
+
     def render_overlay(self):
+        """
+        Renders the active interactive studio on the right canvas with:
+        1. Ghost layer (Frame n-1) in translucent amber/orange.
+        2. Active mask (Frame n) in translucent neon green + cyan outline.
+        """
         if self.current_img_gray is None or self.current_mask is None:
             return
 
         c_w = max(50, self.canvas.winfo_width())
         c_h = max(50, self.canvas.winfo_height())
-        if c_w < 100: c_w, c_h = 900, 650
+        if c_w < 100: c_w, c_h = 750, 650
 
         # Build RGB display
         bgr = cv2.cvtColor(self.current_img_gray, cv2.COLOR_GRAY2BGR)
         overlay = bgr.copy()
 
-        # 1. GHOST LAYER (Frame t-1) in Warm Amber/Orange
+        # 1. GHOST LAYER (Frame n-1) in Warm Amber/Orange
         if self.ghost_enabled and self.prev_mask is not None and np.any(self.prev_mask > 0):
             ghost_layer = np.zeros_like(bgr)
             ghost_layer[self.prev_mask > 0] = [0, 140, 255]  # Amber/Orange in BGR
@@ -520,7 +642,7 @@ class InteractiveAnnotatorTk:
             ghost_contours, _ = cv2.findContours(self.prev_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             cv2.drawContours(overlay, ghost_contours, -1, (0, 140, 255), 2)
 
-        # 2. CURRENT ACTIVE MASK (Frame t) in Neon Green
+        # 2. CURRENT ACTIVE MASK (Frame n) in Neon Green
         if self.current_mask is not None and np.any(self.current_mask > 0):
             curr_layer = np.zeros_like(bgr)
             curr_layer[self.current_mask > 0] = [0, 255, 0]  # Neon Green
@@ -537,12 +659,12 @@ class InteractiveAnnotatorTk:
 
         disp_resized = cv2.resize(overlay, (disp_w, disp_h), interpolation=cv2.INTER_LINEAR)
         img_pil = Image.fromarray(cv2.cvtColor(disp_resized, cv2.COLOR_BGR2RGB))
-        self.tk_img = ImageTk.PhotoImage(img_pil)
+        self.tk_canvas_img = ImageTk.PhotoImage(img_pil)
 
         self.canvas.delete("all")
         off_x = (c_w - disp_w) // 2
         off_y = (c_h - disp_h) // 2
-        self.canvas.create_image(off_x, off_y, anchor=tk.NW, image=self.tk_img)
+        self.canvas.create_image(off_x, off_y, anchor=tk.NW, image=self.tk_canvas_img)
 
         self.render_meta = (off_x, off_y, scale)
 
