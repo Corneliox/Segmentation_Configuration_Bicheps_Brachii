@@ -1,19 +1,20 @@
 """
 =====================================================================
 AI-ASSISTED INTERACTIVE ANNOTATOR (Tkinter Native GUI + PyTorch CUDA)
-With Dual-Viewport: 3-Frame Raw Temporal Filmstrip + Ghost Studio
+Dual-Viewport: Dynamic Temporal Filmstrip (Macro Context) + Ghost Studio
 =====================================================================
 Features:
 1. Dual Viewports:
-   - Left Viewport: 3-frame raw temporal filmstrip [Frame n-1 (Past), Frame n (Current), Frame n+1 (Future)]
-     providing continuous muscle motion and anatomical context.
-   - Right Viewport: Interactive annotation studio with Onion Skinning (Ghost Layer from Frame n-1)
+   - Left Viewport: Dynamic 3-frame temporal filmstrip [Past t-stride | Current Raw t | Future t+stride]
+     with adjustable stride (1, 5, 10, 20 frames) so you can actually see muscle motion & dynamics!
+   - Right Viewport: Interactive annotation studio with Onion Skinning (Ghost Layer from frame n-1)
      and real-time brush/eraser tools.
-2. Adobe Animate Ghost Layer (Onion Skin): displays frame n-1 mask as
+2. Timeline Scrubber: Interactive horizontal scrubber to instantly jump and inspect any contraction phase.
+3. Adobe Animate Ghost Layer (Onion Skin): displays frame n-1 mask as
    a translucent amber/orange ghost to track motion and maintain consistency.
-3. Instant Ghost Copy ([K]): copy previous frame's mask to current frame.
-4. Continuous Active Learning: on-demand or auto incremental fine-tuning (U-Net).
-5. Auto-proposal prediction for new frames via U-Net.
+4. Instant Ghost Copy ([K]): copy previous frame's mask to current frame.
+5. Continuous Active Learning: on-demand or auto incremental fine-tuning (U-Net).
+6. Auto-proposal prediction for new frames via U-Net.
 =====================================================================
 """
 
@@ -39,8 +40,8 @@ from src.utils import CombinedLoss
 class InteractiveAnnotatorTk:
     def __init__(self, root, config_path="configs/config.yaml"):
         self.root = root
-        self.root.title("AI-Assisted Interactive Annotator | Dual-Viewport (Temporal Filmstrip + Ghost Studio)")
-        self.root.geometry("1580x900")
+        self.root.title("AI-Assisted Interactive Annotator | Dual-Viewport (Macro Context & Ghost Studio)")
+        self.root.geometry("1600x920")
         self.root.configure(bg="#121212")
 
         # Bring window to front
@@ -68,6 +69,7 @@ class InteractiveAnnotatorTk:
         self.is_trained = False
         self.is_training_now = False
         self.is_navigating = False
+        self.is_scrubbing = False
         self.ai_proposal_enabled = True
         self.last_key_time = 0.0
 
@@ -88,7 +90,12 @@ class InteractiveAnnotatorTk:
         self.validated_count = 0
         self.auto_retrain_interval = 10
 
-        # Onion Skinning (Ghost Layer)
+        # Temporal Carousel Settings
+        # Default stride 10 frames (~0.33s at 30fps) to clearly reveal muscle contraction & fascial motion!
+        self.carousel_stride = 10
+        self.carousel_show_masks = False
+
+        # Onion Skinning (Ghost Layer on annotation studio)
         self.ghost_enabled = True
         self.prev_mask = None
 
@@ -147,13 +154,16 @@ class InteractiveAnnotatorTk:
         style.configure("TLabel", background="#181818", foreground="#e0e0e0", font=("Segoe UI", 9))
         style.configure("Header.TLabel", background="#181818", foreground="#00e5ff", font=("Segoe UI", 11, "bold"))
         style.configure("Status.TLabel", background="#222222", foreground="#00e676", font=("Consolas", 10, "bold"))
-        style.configure("PanelHeader.TLabel", background="#252525", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
         style.configure("TButton", background="#2c2c2c", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
         style.map("TButton", background=[("active", "#007acc")])
 
         # Accent buttons
         style.configure("Accent.TButton", background="#007acc", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
         style.map("Accent.TButton", background=[("active", "#0098ff")])
+
+        # Mini Stride Buttons
+        style.configure("Mini.TButton", background="#262626", foreground="#00e5ff", font=("Consolas", 8, "bold"), padding=1)
+        style.map("Mini.TButton", background=[("active", "#333333")])
 
         # AI Predict Button
         style.configure("AIPredict.TButton", background="#6a1b9a", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
@@ -167,47 +177,65 @@ class InteractiveAnnotatorTk:
 
     def create_ui(self):
         # 1. Top Bar
-        top_bar = tk.Frame(self.root, bg="#1c1c1c", height=48, padx=15, pady=6)
+        top_bar = tk.Frame(self.root, bg="#1c1c1c", height=46, padx=12, pady=5)
         top_bar.pack(side=tk.TOP, fill=tk.X)
 
         self.lbl_title = ttk.Label(top_bar, text="🔬 AI-ASSISTED ANNOTATOR (ACTIVE U-NET)", style="Header.TLabel")
-        self.lbl_title.pack(side=tk.LEFT, padx=(0, 15))
+        self.lbl_title.pack(side=tk.LEFT, padx=(0, 12))
 
         self.lbl_status = ttk.Label(top_bar, text="Status: Ready", style="Status.TLabel", padding=(10, 3))
-        self.lbl_status.pack(side=tk.LEFT, padx=10)
+        self.lbl_status.pack(side=tk.LEFT, padx=8)
 
         self.lbl_ai_indicator = ttk.Label(top_bar, text="🤖 U-Net: Initializing...", font=("Consolas", 10, "bold"), foreground="#00e5ff")
-        self.lbl_ai_indicator.pack(side=tk.LEFT, padx=10)
+        self.lbl_ai_indicator.pack(side=tk.LEFT, padx=8)
 
         # Legend indicator
         legend_frame = tk.Frame(top_bar, bg="#1c1c1c")
-        legend_frame.pack(side=tk.RIGHT, padx=10)
-        ttk.Label(legend_frame, text="🟢 Active Mask", foreground="#00e676", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=5)
-        ttk.Label(legend_frame, text="|", foreground="#555555").pack(side=tk.LEFT, padx=3)
-        ttk.Label(legend_frame, text="🟠 Ghost (n-1)", foreground="#ff9800", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=5)
-        ttk.Label(legend_frame, text="|", foreground="#555555").pack(side=tk.LEFT, padx=3)
-        ttk.Label(legend_frame, text="🔲 Raw Filmstrip", foreground="#00e5ff", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=5)
-        ttk.Label(legend_frame, text="|", foreground="#555555").pack(side=tk.LEFT, padx=3)
+        legend_frame.pack(side=tk.RIGHT, padx=5)
+        ttk.Label(legend_frame, text="🟢 Active Mask", foreground="#00e676", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=4)
+        ttk.Label(legend_frame, text="|", foreground="#555555").pack(side=tk.LEFT, padx=2)
+        ttk.Label(legend_frame, text="🟠 Ghost (n-1)", foreground="#ff9800", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=4)
+        ttk.Label(legend_frame, text="|", foreground="#555555").pack(side=tk.LEFT, padx=2)
+        ttk.Label(legend_frame, text="🎞️ Macro Context", foreground="#00e5ff", font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=4)
+        ttk.Label(legend_frame, text="|", foreground="#555555").pack(side=tk.LEFT, padx=2)
         self.lbl_device = ttk.Label(legend_frame, text=f"GPU: {self.device.type.upper()}", font=("Consolas", 9), foreground="#888888")
-        self.lbl_device.pack(side=tk.LEFT, padx=5)
+        self.lbl_device.pack(side=tk.LEFT, padx=4)
 
         # 2. Dual-Viewport Center Area
         center_container = tk.Frame(self.root, bg="#0a0a0a")
         center_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=4)
 
-        # Left Viewport: Raw Temporal Filmstrip (Frames n-1, n, n+1)
+        # Left Viewport: Macro Temporal Filmstrip [Past t-stride | Current t | Future t+stride]
         left_frame = tk.Frame(center_container, bg="#141414", highlightbackground="#2a2a2a", highlightthickness=1)
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
 
-        left_header = tk.Frame(left_frame, bg="#202020", padx=10, pady=5)
+        left_header = tk.Frame(left_frame, bg="#202020", padx=8, pady=5)
         left_header.pack(side=tk.TOP, fill=tk.X)
         self.lbl_left_title = ttk.Label(
             left_header, 
-            text="🎞️ TEMPORAL FILMSTRIP [Frame n-1 (Past) | Frame n (Current) | Frame n+1 (Future)]", 
+            text=f"🎞️ TEMPORAL FILMSTRIP [Past t-{self.carousel_stride} | Current t | Future t+{self.carousel_stride}]", 
             font=("Segoe UI", 9, "bold"),
             foreground="#00e5ff"
         )
         self.lbl_left_title.pack(side=tk.LEFT)
+
+        # Stride Controls in Left Header
+        stride_ctrl_frame = tk.Frame(left_header, bg="#202020")
+        stride_ctrl_frame.pack(side=tk.RIGHT)
+
+        ttk.Label(stride_ctrl_frame, text="Stride:", font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=(5, 2))
+        ttk.Button(stride_ctrl_frame, text="-", style="Mini.TButton", width=2, command=lambda: self.adjust_stride(-1), takefocus=False).pack(side=tk.LEFT, padx=1)
+        self.lbl_stride = ttk.Label(stride_ctrl_frame, text=f"±{self.carousel_stride}f", font=("Consolas", 9, "bold"), foreground="#00e5ff")
+        self.lbl_stride.pack(side=tk.LEFT, padx=2)
+        ttk.Button(stride_ctrl_frame, text="+", style="Mini.TButton", width=2, command=lambda: self.adjust_stride(1), takefocus=False).pack(side=tk.LEFT, padx=1)
+
+        ttk.Button(stride_ctrl_frame, text="x1", style="Mini.TButton", width=3, command=lambda: self.set_stride(1), takefocus=False).pack(side=tk.LEFT, padx=1)
+        ttk.Button(stride_ctrl_frame, text="x5", style="Mini.TButton", width=3, command=lambda: self.set_stride(5), takefocus=False).pack(side=tk.LEFT, padx=1)
+        ttk.Button(stride_ctrl_frame, text="x10", style="Mini.TButton", width=3, command=lambda: self.set_stride(10), takefocus=False).pack(side=tk.LEFT, padx=1)
+        ttk.Button(stride_ctrl_frame, text="x20", style="Mini.TButton", width=3, command=lambda: self.set_stride(20), takefocus=False).pack(side=tk.LEFT, padx=1)
+
+        self.btn_film_mask = ttk.Button(stride_ctrl_frame, text="Masks: OFF", style="Mini.TButton", width=9, command=self.toggle_filmstrip_masks, takefocus=False)
+        self.btn_film_mask.pack(side=tk.LEFT, padx=(4, 0))
 
         self.canvas_carousel = tk.Canvas(left_frame, bg="#050505", highlightthickness=0)
         self.canvas_carousel.pack(fill=tk.BOTH, expand=True)
@@ -229,7 +257,32 @@ class InteractiveAnnotatorTk:
         self.canvas = tk.Canvas(right_frame, bg="#050505", highlightthickness=0, cursor="crosshair")
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
-        # 3. Bottom Control Panel
+        # 3. Video Timeline Scrubber Bar
+        timeline_frame = tk.Frame(self.root, bg="#181818", padx=15, pady=4)
+        timeline_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+        ttk.Label(timeline_frame, text="⏩ Timeline:", font=("Segoe UI", 9, "bold"), foreground="#00e5ff").pack(side=tk.LEFT, padx=(0, 6))
+
+        total_frames = max(1, len(self.image_paths))
+        self.scale_timeline = tk.Scale(
+            timeline_frame,
+            from_=0,
+            to=total_frames - 1,
+            orient=tk.HORIZONTAL,
+            bg="#181818",
+            fg="#00e5ff",
+            troughcolor="#282828",
+            activebackground="#007acc",
+            highlightthickness=0,
+            showvalue=0,
+            command=self.on_timeline_scrub
+        )
+        self.scale_timeline.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
+        self.lbl_trial_info = ttk.Label(timeline_frame, text="Trial: Initializing...", font=("Consolas", 9), foreground="#aaaaaa")
+        self.lbl_trial_info.pack(side=tk.RIGHT, padx=5)
+
+        # 4. Bottom Control Panel
         bot_bar = tk.Frame(self.root, bg="#1c1c1c", padx=15, pady=8)
         bot_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
@@ -275,7 +328,7 @@ class InteractiveAnnotatorTk:
 
         self.lbl_hud = ttk.Label(
             hud_row, 
-            text="[Klik Kiri]: Gambar Mask | [Klik Kanan]: Hapus Mask | [W / SPACE]: Simpan & Lanjut | [Q]: Prev | [U]: U-Net Predict | [K]: Copy Ghost | [G]: Ghost ON/OFF | [J]: Loncat Frame Baru",
+            text="[Klik Kiri]: Gambar | [Klik Kanan]: Hapus | [W / SPACE]: Simpan & Lanjut | [Q]: Prev | [U]: AI Predict | [K]: Copy Ghost | [G]: Ghost | [- / +]: Stride Karousel",
             font=("Segoe UI", 9), 
             foreground="#aaaaaa"
         )
@@ -317,9 +370,41 @@ class InteractiveAnnotatorTk:
         self.root.bind("<bracketleft>", lambda e: self.handle_key_brush(-2))
         self.root.bind("<bracketright>", lambda e: self.handle_key_brush(2))
 
+        # Stride adjustment shortcuts: [-] and [=]/[+]
+        self.root.bind("<minus>", lambda e: self.adjust_stride(-1))
+        self.root.bind("<equal>", lambda e: self.adjust_stride(1))
+        self.root.bind("<plus>", lambda e: self.adjust_stride(1))
+
         # Dynamic Canvas Resize
         self.canvas.bind("<Configure>", lambda e: self.render_overlay())
         self.canvas_carousel.bind("<Configure>", lambda e: self.render_context_carousel())
+
+    def adjust_stride(self, delta):
+        self.set_stride(self.carousel_stride + delta)
+        return "break"
+
+    def set_stride(self, stride_val):
+        self.carousel_stride = max(1, min(50, stride_val))
+        self.lbl_stride.config(text=f"±{self.carousel_stride}f")
+        self.lbl_left_title.config(
+            text=f"🎞️ TEMPORAL FILMSTRIP [Past t-{self.carousel_stride} | Current t | Future t+{self.carousel_stride}]"
+        )
+        self.render_context_carousel()
+
+    def toggle_filmstrip_masks(self):
+        self.carousel_show_masks = not self.carousel_show_masks
+        if self.carousel_show_masks:
+            self.btn_film_mask.config(text="Masks: ON", style="Accent.TButton")
+        else:
+            self.btn_film_mask.config(text="Masks: OFF", style="Mini.TButton")
+        self.render_context_carousel()
+
+    def on_timeline_scrub(self, val):
+        if self.is_scrubbing or not self.image_paths:
+            return
+        target_idx = int(float(val))
+        if target_idx != self.current_idx and 0 <= target_idx < len(self.image_paths):
+            self.load_frame(target_idx)
 
     def handle_key_nav(self, delta):
         now = time.time()
@@ -526,7 +611,17 @@ class InteractiveAnnotatorTk:
                 self.current_mask = np.zeros((self.orig_h, self.orig_w), dtype=np.uint8)
                 self.lbl_status.config(text="Status: Manual Cold-Start (Draw / [U] Predict AI)", foreground="#ffb74d")
 
+        # Update Timeline Scrubber
+        self.is_scrubbing = True
+        self.scale_timeline.set(self.current_idx)
+        self.is_scrubbing = False
+
+        # Update labels
+        trial_name = os.path.basename(os.path.dirname(img_path))
+        subj_name = os.path.basename(os.path.dirname(os.path.dirname(img_path)))
+        self.lbl_trial_info.config(text=f"{subj_name} | {trial_name}")
         self.lbl_progress.config(text=f"Frame {self.current_idx + 1}/{len(self.image_paths)}")
+
         self.render_context_carousel()
         self.render_overlay()
 
@@ -549,8 +644,9 @@ class InteractiveAnnotatorTk:
 
     def render_context_carousel(self):
         """
-        Renders the 3-frame raw temporal filmstrip side-by-side:
-        [Frame n-1 (Past Raw) | Frame n (Current Raw Highlighted) | Frame n+1 (Future Raw)]
+        Renders the 3-frame macro temporal filmstrip side-by-side:
+        [Past t-stride | Current Raw t (Highlighted) | Future t+stride]
+        Bounded within the same trial folder so it never crosses patient boundaries!
         """
         if not self.image_paths or self.current_img_gray is None:
             return
@@ -559,41 +655,74 @@ class InteractiveAnnotatorTk:
         c_h = max(50, self.canvas_carousel.winfo_height())
         if c_w < 100: c_w, c_h = 750, 650
 
-        # Frame n-1 (Past)
-        if self.current_idx > 0:
-            past_path = self.image_paths[self.current_idx - 1]
-            past_img = cv2.imread(past_path, cv2.IMREAD_GRAYSCALE)
-            if past_img is not None:
-                past_bgr = cv2.cvtColor(past_img, cv2.COLOR_GRAY2BGR)
-            else:
-                past_bgr = np.zeros((self.orig_h, self.orig_w, 3), dtype=np.uint8)
+        curr_path = self.image_paths[self.current_idx]
+        curr_dir = os.path.dirname(curr_path)
+
+        # 1. Determine Past Frame index (bounded by trial start)
+        past_idx = self.current_idx - self.carousel_stride
+        if past_idx < 0 or os.path.dirname(self.image_paths[past_idx]) != curr_dir:
+            # Clamp to first frame of this trial
+            for idx in range(self.current_idx, -1, -1):
+                if os.path.dirname(self.image_paths[idx]) == curr_dir:
+                    past_idx = idx
+                else:
+                    break
+
+        if past_idx != self.current_idx:
+            past_img = cv2.imread(self.image_paths[past_idx], cv2.IMREAD_GRAYSCALE)
+            past_bgr = cv2.cvtColor(past_img, cv2.COLOR_GRAY2BGR) if past_img is not None else np.zeros((self.orig_h, self.orig_w, 3), dtype=np.uint8)
+            # Optional mask overlay
+            if self.carousel_show_masks:
+                p_rel = os.path.relpath(self.image_paths[past_idx], self.img_base)
+                p_mask_path = os.path.join(self.mask_base, p_rel)
+                if os.path.exists(p_mask_path):
+                    p_mask = cv2.imread(p_mask_path, cv2.IMREAD_GRAYSCALE)
+                    if p_mask is not None and np.any(p_mask > 0):
+                        ml = np.zeros_like(past_bgr)
+                        ml[p_mask > 0] = [0, 200, 100]
+                        past_bgr = cv2.addWeighted(past_bgr, 1.0, ml, 0.35, 0)
             # Badge
             cv2.rectangle(past_bgr, (0, 0), (self.orig_w, 24), (20, 20, 20), -1)
-            cv2.putText(past_bgr, f"n-1 (Frame {self.current_idx})", (6, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 160, 160), 1, cv2.LINE_AA)
+            cv2.putText(past_bgr, f"Past [t-{self.carousel_stride}] (F{past_idx+1})", (6, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 180, 180), 1, cv2.LINE_AA)
         else:
             past_bgr = np.zeros((self.orig_h, self.orig_w, 3), dtype=np.uint8)
-            cv2.putText(past_bgr, "[START]", (self.orig_w // 2 - 35, self.orig_h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 100, 100), 1, cv2.LINE_AA)
+            cv2.putText(past_bgr, "[TRIAL START]", (self.orig_w // 2 - 50, self.orig_h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (100, 100, 100), 1, cv2.LINE_AA)
 
-        # Frame n (Current Raw with Cyan Highlight Border)
+        # 2. Current Frame (Highlight Cyan Border & Badge)
         curr_bgr = cv2.cvtColor(self.current_img_gray, cv2.COLOR_GRAY2BGR)
         cv2.rectangle(curr_bgr, (0, 0), (self.orig_w - 1, self.orig_h - 1), (255, 255, 0), 2)  # Cyan border
         cv2.rectangle(curr_bgr, (0, 0), (self.orig_w, 24), (0, 120, 150), -1)
-        cv2.putText(curr_bgr, f"* n (Frame {self.current_idx + 1}) *", (6, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(curr_bgr, f"* Current [t] (F{self.current_idx + 1}) *", (6, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
 
-        # Frame n+1 (Future)
-        if self.current_idx < len(self.image_paths) - 1:
-            future_path = self.image_paths[self.current_idx + 1]
-            future_img = cv2.imread(future_path, cv2.IMREAD_GRAYSCALE)
-            if future_img is not None:
-                future_bgr = cv2.cvtColor(future_img, cv2.COLOR_GRAY2BGR)
-            else:
-                future_bgr = np.zeros((self.orig_h, self.orig_w, 3), dtype=np.uint8)
+        # 3. Determine Future Frame index (bounded by trial end)
+        future_idx = self.current_idx + self.carousel_stride
+        if future_idx >= len(self.image_paths) or os.path.dirname(self.image_paths[future_idx]) != curr_dir:
+            # Clamp to last frame of this trial
+            for idx in range(self.current_idx, len(self.image_paths)):
+                if os.path.dirname(self.image_paths[idx]) == curr_dir:
+                    future_idx = idx
+                else:
+                    break
+
+        if future_idx != self.current_idx:
+            future_img = cv2.imread(self.image_paths[future_idx], cv2.IMREAD_GRAYSCALE)
+            future_bgr = cv2.cvtColor(future_img, cv2.COLOR_GRAY2BGR) if future_img is not None else np.zeros((self.orig_h, self.orig_w, 3), dtype=np.uint8)
+            # Optional mask overlay
+            if self.carousel_show_masks:
+                f_rel = os.path.relpath(self.image_paths[future_idx], self.img_base)
+                f_mask_path = os.path.join(self.mask_base, f_rel)
+                if os.path.exists(f_mask_path):
+                    f_mask = cv2.imread(f_mask_path, cv2.IMREAD_GRAYSCALE)
+                    if f_mask is not None and np.any(f_mask > 0):
+                        ml = np.zeros_like(future_bgr)
+                        ml[f_mask > 0] = [0, 200, 100]
+                        future_bgr = cv2.addWeighted(future_bgr, 1.0, ml, 0.35, 0)
             # Badge
             cv2.rectangle(future_bgr, (0, 0), (self.orig_w, 24), (20, 20, 20), -1)
-            cv2.putText(future_bgr, f"n+1 (Frame {self.current_idx + 2})", (6, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 160, 160), 1, cv2.LINE_AA)
+            cv2.putText(future_bgr, f"Future [t+{self.carousel_stride}] (F{future_idx+1})", (6, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 180, 180), 1, cv2.LINE_AA)
         else:
             future_bgr = np.zeros((self.orig_h, self.orig_w, 3), dtype=np.uint8)
-            cv2.putText(future_bgr, "[END]", (self.orig_w // 2 - 25, self.orig_h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (100, 100, 100), 1, cv2.LINE_AA)
+            cv2.putText(future_bgr, "[TRIAL END]", (self.orig_w // 2 - 45, self.orig_h // 2), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (100, 100, 100), 1, cv2.LINE_AA)
 
         # 4px Divider column
         divider = np.full((self.orig_h, 4, 3), 40, dtype=np.uint8)
