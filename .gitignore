@@ -22,6 +22,9 @@ dataset/
 # Logs and training runs
 runs/
 logs/
+outputs/*.mp4
+outputs/*.csv
+outputs/*.png
 wandb/
 .pytest_cache/
 .ipynb_checkpoints/
