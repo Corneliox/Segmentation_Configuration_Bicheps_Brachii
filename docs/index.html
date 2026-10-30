@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Biceps Brachii Ultrasound Segmentation - Interactive Web Trial</title>
+  <meta name="description" content="Interactive web demonstration of the Biceps Brachii ultrasound segmentation and dynamic muscle thickness quantification pipeline.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <h1>Biceps Brachii Ultrasound Segmentation</h1>
+      <p>ArtUs / Telemed L12-5N40-A4 Linear Array (128 Scanlines, 512x219 px)</p>
+    </div>
+    <div class="header-meta">
+      <span class="badge badge-nano">Nano Web Model</span>
+      <span class="badge badge-license">CC BY-NC-SA 4.0</span>
+      <a href="https://github.com/Corneliox/Segmentation_Configuration_Bicheps_Brachii" target="_blank" rel="noopener noreferrer" class="btn-github">
+        GitHub Repository
+      </a>
+    </div>
+  </header>
+
+  <div class="alert-banner">
+    <div>
+      <strong>Notice:</strong> This web demonstration runs a client-side lightweight Nano model for browser evaluation without server computation. For the full ResNet-34 U-Net architecture, continual active learning fine-tuning, and macro temporal filmstrips, please download and run the native desktop application.
+    </div>
+    <a href="#quickstart">Download Native App</a>
+  </div>
+
+  <main>
+    <section class="viewer-section">
+      <div class="viewer-header">
+        <h2>Interactive B-Mode Cine Viewport &amp; Masking Studio</h2>
+        <span id="frameLabel" class="metric-value cyan">Frame 1 / 30</span>
+      </div>
+
+      <div class="canvas-wrapper">
+        <canvas id="viewport" width="219" height="512"></canvas>
+      </div>
+
+      <div class="timeline-bar">
+        <div class="timeline-controls">
+          <input type="range" id="frameSlider" min="0" max="29" value="0" step="1">
+        </div>
+        <div class="timeline-labels">
+          <span>0.00s (Rest Phase)</span>
+          <span>Timeline Scrubber</span>
+          <span>1.00s (Peak Contraction)</span>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <button id="btnPlay" class="btn-tool">Play Cine</button>
+        <button id="btnPrev" class="btn-tool">Previous</button>
+        <button id="btnNext" class="btn-tool">Next</button>
+        <button id="btnNanoAI" class="btn-tool active-green">Nano AI: ON</button>
+        <button id="btnGhost" class="btn-tool active-amber">Ghost Layer: ON</button>
+        <button id="btnBrush" class="btn-tool active">Brush Tool</button>
+        <button id="btnEraser" class="btn-tool">Eraser Tool</button>
+        <button id="btnClear" class="btn-tool">Clear Mask</button>
+        <div style="display: flex; align-items: center; gap: 0.5rem; margin-left: auto;">
+          <label for="brushSlider" style="font-size: 0.78rem; color: var(--text-secondary);">Size:</label>
+          <input type="range" id="brushSlider" min="4" max="32" value="12" style="width: 80px; accent-color: var(--accent-cyan);">
+          <span id="brushSizeLabel" style="font-size: 0.75rem; font-family: var(--font-mono); color: var(--accent-cyan);">12 px</span>
+        </div>
+      </div>
+    </section>
+
+    <aside class="sidebar">
+      <div class="panel">
+        <h3>Real-Time Biomechanical Metrics</h3>
+        <div class="metric-row">
+          <span class="metric-label">Mean Muscle Thickness</span>
+          <span id="statMeanThickness" class="metric-value cyan">0.00 mm</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Max Muscle Thickness</span>
+          <span id="statMaxThickness" class="metric-value green">0.00 mm</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Superficial Fascia Depth</span>
+          <span id="statFasciaSuperficial" class="metric-value">--</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Deep Fascia Depth</span>
+          <span id="statFasciaDeep" class="metric-value">--</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Cross-Sectional Area</span>
+          <span id="statMaskArea" class="metric-value amber">0.00 cm²</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Spatial Calibration</span>
+          <span class="metric-value">0.1757 mm/px</span>
+        </div>
+      </div>
+
+      <div class="panel" id="quickstart">
+        <h3>Native Desktop Application</h3>
+        <p style="font-size: 0.8rem; color: var(--text-secondary);">
+          Access the full ResNet-34 U-Net model with live GPU Active Learning, dual-viewport temporal filmstrip, and batch extraction:
+        </p>
+        <div class="code-box">
+git clone https://github.com/Corneliox/Segmentation_Configuration_Bicheps_Brachii.git
+cd Segmentation_Configuration_Bicheps_Brachii
+pip install -r requirements.txt
+python interactive_annotator.py
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Research &amp; Attribution</h3>
+        <p style="font-size: 0.8rem; color: var(--text-secondary);">
+          <strong>Author:</strong> Cornelio<br>
+          <strong>Contact:</strong> cornelioabdimash@gmail.com<br>
+          <strong>Affiliation:</strong> Asia University, Taiwan / Biomedical Engineering Research Collaboration<br>
+          <strong>License:</strong> CC BY-NC-SA 4.0 (Non-commercial research only). Commercial use requires prior written consent.
+        </p>
+      </div>
+    </aside>
+  </main>
+
+  <footer>
+    <p>
+      Biceps Brachii Ultrasound Segmentation Pipeline. Copyright &copy; 2026 Cornelio. Distributed under Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International.
+    </p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

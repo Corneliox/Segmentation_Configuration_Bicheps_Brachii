@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, datasets, models, or documentation in your research, please cite it as below."
+authors:
+  - family-names: "Cornelio"
+    given-names: "Cornelio"
+    email: "cornelioabdimash@gmail.com"
+    affiliation: "Asia University, Department of Computer Science and Information Engineering / Biomedical Engineering Collaboration"
+title: "Biceps Brachii Ultrasound Segmentation and Muscle Thickness Quantification Pipeline"
+version: 2.1.0
+date-released: 2026-10-22
+url: "https://github.com/Corneliox/Segmentation_Configuration_Bicheps_Brachii"
+repository-code: "https://github.com/Corneliox/Segmentation_Configuration_Bicheps_Brachii"
+license: "CC-BY-NC-SA-4.0"
+keywords:
+  - "ultrasound segmentation"
+  - "biceps brachii"
+  - "deep learning"
+  - "active learning"
+  - "u-net"
+  - "muscle architecture"
+  - "fascicle tracking"
+  - "biomechanics"
+  - "pytorch"

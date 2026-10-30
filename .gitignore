@@ -3,28 +3,34 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# PyTorch / checkpoints / weights (keep only .gitkeep)
+# PyTorch checkpoints (large raw binary, not needed for web deployment)
 weights/*.pth
 weights/*.pt
-weights/*.onnx
 !weights/.gitkeep
+
+# Keep ONNX web models and metadata tracked
+!weights/biceps_brachii_unet.onnx
+!weights/biceps_brachii_unet_quantized.onnx
+!weights/model_metadata.json
 
 # Datasets and raw binary/image sequences (stored in parent folder)
 *.bin
-*.csv
 *.mat
-*.png
-*.jpg
-*.jpeg
 data/
 dataset/
+
+# Node / npm Web dependencies and build outputs
+web/node_modules/
+web/dist/
+web/.vite/
+*.log
 
 # Logs and training runs
 runs/
 logs/
 outputs/*.mp4
-outputs/*.csv
 outputs/*.png
+outputs/*.csv
 wandb/
 .pytest_cache/
 .ipynb_checkpoints/
@@ -37,10 +43,10 @@ env/
 venv/
 ENV/
 
+# Credentials & Sensitive Files
+local_credentials_mapping.*
+temp_anonymized_upload/
+
 # OS specific files
 .DS_Store
 Thumbs.db
-
-# Roboflow Anonymization Credentials & Temporary Folders
-local_credentials_mapping.*
-temp_anonymized_upload/

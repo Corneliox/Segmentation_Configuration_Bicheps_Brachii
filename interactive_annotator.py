@@ -32,6 +32,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import TensorDataset, DataLoader
 
 from src.model import build_model
 from src.utils import CombinedLoss
@@ -66,6 +67,7 @@ class InteractiveAnnotatorTk:
 
         self.model_checkpoint = os.path.join(self.weights_dir, "interactive_unet.pth")
         self.model = build_model(self.cfg).to(self.device)
+        self.model_lock = threading.Lock()
         self.is_trained = False
         self.is_training_now = False
         self.is_navigating = False
@@ -309,7 +311,7 @@ class InteractiveAnnotatorTk:
         self.btn_copy = ttk.Button(btn_row, text="📋 Copy Ghost (K)", width=14, command=self.copy_prev_mask, takefocus=False)
         self.btn_copy.pack(side=tk.LEFT, padx=3)
 
-        self.btn_retrain = ttk.Button(btn_row, text="⚡ Train U-Net (T)", width=15, command=self.trigger_train_thread, takefocus=False)
+        self.btn_retrain = ttk.Button(btn_row, text="⚡ Train U-Net (T)", width=15, command=lambda: self.trigger_train_workflow(on_complete=None), takefocus=False)
         self.btn_retrain.pack(side=tk.LEFT, padx=3)
 
         self.btn_clear = ttk.Button(btn_row, text="🧹 Clear (C)", width=10, command=self.clear_mask, takefocus=False)
@@ -400,13 +402,15 @@ class InteractiveAnnotatorTk:
         self.render_context_carousel()
 
     def on_timeline_scrub(self, val):
-        if self.is_scrubbing or not self.image_paths:
+        if self.is_training_now or self.is_scrubbing or not self.image_paths:
             return
         target_idx = int(float(val))
         if target_idx != self.current_idx and 0 <= target_idx < len(self.image_paths):
             self.load_frame(target_idx)
 
     def handle_key_nav(self, delta):
+        if self.is_training_now:
+            return "break"
         now = time.time()
         if now - self.last_key_time < 0.20:
             return "break"
@@ -418,6 +422,8 @@ class InteractiveAnnotatorTk:
         return "break"
 
     def handle_key_predict(self):
+        if self.is_training_now:
+            return "break"
         now = time.time()
         if now - self.last_key_time < 0.20:
             return "break"
@@ -426,6 +432,8 @@ class InteractiveAnnotatorTk:
         return "break"
 
     def handle_key_jump(self):
+        if self.is_training_now:
+            return "break"
         now = time.time()
         if now - self.last_key_time < 0.20:
             return "break"
@@ -434,6 +442,8 @@ class InteractiveAnnotatorTk:
         return "break"
 
     def handle_key_ghost(self):
+        if self.is_training_now:
+            return "break"
         now = time.time()
         if now - self.last_key_time < 0.15:
             return "break"
@@ -442,6 +452,8 @@ class InteractiveAnnotatorTk:
         return "break"
 
     def handle_key_copy(self):
+        if self.is_training_now:
+            return "break"
         now = time.time()
         if now - self.last_key_time < 0.15:
             return "break"
@@ -450,14 +462,18 @@ class InteractiveAnnotatorTk:
         return "break"
 
     def handle_key_train(self):
+        if self.is_training_now:
+            return "break"
         now = time.time()
         if now - self.last_key_time < 0.20:
             return "break"
         self.last_key_time = now
-        self.trigger_train_thread()
+        self.trigger_train_workflow(on_complete=None)
         return "break"
 
     def handle_key_clear(self):
+        if self.is_training_now:
+            return "break"
         now = time.time()
         if now - self.last_key_time < 0.15:
             return "break"
@@ -492,7 +508,7 @@ class InteractiveAnnotatorTk:
             self.lbl_status.config(text="Status: Tidak ada Ghost mask pada frame sebelumnya", foreground="#ffb74d")
 
     def manual_predict(self):
-        if self.current_img_gray is None:
+        if self.is_training_now or self.current_img_gray is None:
             return
         if not self.is_trained:
             if os.path.exists(self.model_checkpoint):
@@ -510,7 +526,7 @@ class InteractiveAnnotatorTk:
             messagebox.showwarning("U-Net Belum Siap", "U-Net belum memiliki bobot terlatih.\nSilakan anotasi minimal 5-10 frame terlebih dahulu!")
 
     def jump_next_unannotated(self):
-        if not self.image_paths:
+        if self.is_training_now or not self.image_paths:
             return
         for i in range(self.current_idx + 1, len(self.image_paths)):
             p = self.image_paths[i]
@@ -536,24 +552,34 @@ class InteractiveAnnotatorTk:
         return None, None
 
     def draw_brush(self, cx, cy, color):
+        if self.is_training_now:
+            return
         mx, my = self.canvas_to_mask_coords(cx, cy)
         if mx is not None and self.current_mask is not None:
             cv2.circle(self.current_mask, (mx, my), self.brush_size, color, -1)
             self.render_overlay()
 
     def on_left_down(self, event):
+        if self.is_training_now:
+            return
         self.drawing = True
         self.draw_brush(event.x, event.y, 255)
 
     def on_left_drag(self, event):
+        if self.is_training_now:
+            return
         if self.drawing:
             self.draw_brush(event.x, event.y, 255)
 
     def on_right_down(self, event):
+        if self.is_training_now:
+            return
         self.erasing = True
         self.draw_brush(event.x, event.y, 0)
 
     def on_right_drag(self, event):
+        if self.is_training_now:
+            return
         if self.erasing:
             self.draw_brush(event.x, event.y, 0)
 
@@ -562,12 +588,14 @@ class InteractiveAnnotatorTk:
         self.erasing = False
 
     def clear_mask(self):
+        if self.is_training_now:
+            return
         if self.current_mask is not None:
             self.current_mask.fill(0)
             self.render_overlay()
 
     def load_frame(self, idx):
-        if not self.image_paths:
+        if self.is_training_now or not self.image_paths:
             return
 
         self.current_idx = max(0, min(len(self.image_paths) - 1, idx))
@@ -605,8 +633,15 @@ class InteractiveAnnotatorTk:
         if not has_valid_saved_mask:
             # Predict proposal with U-Net
             if self.is_trained and self.ai_proposal_enabled:
-                self.current_mask = self.predict_unet(self.current_img_gray)
-                self.lbl_status.config(text="Status: 🤖 AI Auto-Proposal (Check & Confirm)", foreground="#00e5ff")
+                try:
+                    self.current_mask = self.predict_unet(self.current_img_gray)
+                    self.lbl_status.config(text="Status: 🤖 AI Auto-Proposal (Check & Confirm)", foreground="#00e5ff")
+                except Exception as pred_err:
+                    print(f"[WARNING] Gagal membuat proposal AI ({pred_err}), membersihkan VRAM...")
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    self.current_mask = np.zeros((self.orig_h, self.orig_w), dtype=np.uint8)
+                    self.lbl_status.config(text="Status: AI VRAM penuh, silakan gambar manual / salin Ghost [K]", foreground="#ffb74d")
             else:
                 self.current_mask = np.zeros((self.orig_h, self.orig_w), dtype=np.uint8)
                 self.lbl_status.config(text="Status: Manual Cold-Start (Draw / [U] Predict AI)", foreground="#ffb74d")
@@ -625,22 +660,70 @@ class InteractiveAnnotatorTk:
         self.render_context_carousel()
         self.render_overlay()
 
+    def postprocess_muscle_mask(self, raw_mask):
+        """
+        Anatomical post-processing for Biceps Brachii ultrasound masks:
+        1. Morphological closing to seal speckle dropouts and gaps.
+        2. Connected components analysis to retain the primary muscle compartment.
+        3. Contour hole-filling to eliminate Swiss-cheese / hollow regions ("bolong-bolong").
+        """
+        if raw_mask is None or np.count_nonzero(raw_mask) == 0:
+            return raw_mask
+
+        # 1. Morphological closing with elliptical structuring element
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        closed = cv2.morphologyEx(raw_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+        # 2. Keep the largest connected component
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(closed, connectivity=8)
+        if num_labels <= 1:
+            return closed
+
+        # Find largest non-background component (index 1 to num_labels-1)
+        largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+        main_component = np.uint8(labels == largest_label) * 255
+
+        # 3. Fill all internal holes (topological closure)
+        contours, hierarchy = cv2.findContours(main_component, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        filled_mask = np.zeros_like(main_component)
+        if contours and hierarchy is not None:
+            for i, h in enumerate(hierarchy[0]):
+                if h[3] == -1:  # Only root/external contours
+                    cv2.drawContours(filled_mask, contours, i, 255, -1)
+        else:
+            filled_mask = main_component
+
+        return filled_mask
+
     def predict_unet(self, img_gray):
-        self.model.eval()
-        h, w = img_gray.shape
-        tw = int(round(w / 32.0)) * 32
-        th = int(round(h / 32.0)) * 32
+        with self.model_lock:
+            h, w = img_gray.shape
+            tw = int(round(w / 32.0)) * 32
+            th = int(round(h / 32.0)) * 32
 
-        resized = cv2.resize(img_gray, (tw, th), interpolation=cv2.INTER_LINEAR)
-        x = (resized.astype(np.float32) / 255.0 - 0.5) / 0.5
-        t_in = torch.tensor(x, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(self.device)
+            resized = cv2.resize(img_gray, (tw, th), interpolation=cv2.INTER_LINEAR)
+            x = (resized.astype(np.float32) / 255.0 - 0.5) / 0.5
 
-        with torch.no_grad():
-            out = self.model(t_in)
-            arr = out.squeeze().cpu().numpy()
-            bin_mask = (arr > 0.5).astype(np.uint8) * 255
+            try:
+                self.model.eval()
+                t_in = torch.tensor(x, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(self.device)
+                with torch.no_grad():
+                    if self.device.type == "cuda":
+                        with torch.cuda.amp.autocast(dtype=torch.float16):
+                            out = self.model(t_in)
+                    else:
+                        out = self.model(t_in)
+                    arr = out.squeeze().cpu().numpy()
+                    del t_in, out
+                bin_mask = (arr > 0.5).astype(np.uint8) * 255
+            except Exception as e:
+                print(f"[WARNING] GPU inference warning: {e}. Membersihkan cache CUDA...")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                bin_mask = np.zeros((th, tw), dtype=np.uint8)
 
-        return cv2.resize(bin_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+            raw_pred = cv2.resize(bin_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+            return self.postprocess_muscle_mask(raw_pred)
 
     def render_context_carousel(self):
         """
@@ -798,7 +881,7 @@ class InteractiveAnnotatorTk:
         self.render_meta = (off_x, off_y, scale)
 
     def next_frame(self):
-        if not self.image_paths or self.is_navigating:
+        if not self.image_paths or self.is_navigating or self.is_training_now:
             return
 
         self.is_navigating = True
@@ -813,19 +896,24 @@ class InteractiveAnnotatorTk:
             self.validated_count += 1
             print(f"[{self.current_idx + 1}/{len(self.image_paths)}] ✓ Mask Tersimpan: {rel_path}")
 
+            def advance_after_save():
+                self.is_navigating = False
+                if self.current_idx < len(self.image_paths) - 1:
+                    self.load_frame(self.current_idx + 1)
+                else:
+                    messagebox.showinfo("Complete!", "Selamat! Seluruh frame telah selesai divalidasi.")
+
             # Check auto-retrain trigger
             if self.validated_count % self.auto_retrain_interval == 0:
-                self.trigger_train_thread()
-
-            if self.current_idx < len(self.image_paths) - 1:
-                self.load_frame(self.current_idx + 1)
+                self.trigger_train_workflow(on_complete=advance_after_save)
             else:
-                messagebox.showinfo("Complete!", "Selamat! Seluruh frame telah selesai divalidasi.")
-        finally:
+                advance_after_save()
+        except Exception as e:
             self.is_navigating = False
+            print(f"[ERROR] next_frame error: {e}")
 
     def prev_frame(self):
-        if not self.image_paths or self.is_navigating:
+        if not self.image_paths or self.is_navigating or self.is_training_now:
             return
 
         self.is_navigating = True
@@ -836,75 +924,225 @@ class InteractiveAnnotatorTk:
             self.is_navigating = False
 
     def trigger_train_thread(self):
+        self.trigger_train_workflow(on_complete=None)
+
+    def trigger_train_workflow(self, on_complete=None):
         if self.is_training_now:
             return
-        thread = threading.Thread(target=self.run_fine_tuning, daemon=True)
-        thread.start()
-
-    def run_fine_tuning(self):
-        self.is_training_now = True
-        self.lbl_status.config(text="Status: ⚡ Training U-Net with GPU...", foreground="#ff5252")
 
         mask_files = sorted(glob.glob(os.path.join(self.mask_base, "**", "frame_*.png"), recursive=True))
         if len(mask_files) < 2:
-            self.is_training_now = False
-            self.lbl_status.config(text="Status: Butuh minimal 2 frame untuk train", foreground="#ffb74d")
+            self.lbl_status.config(text="Status: Butuh minimal 2 frame valid untuk training", foreground="#ffb74d")
+            if on_complete:
+                on_complete()
             return
 
-        print(f"\n⚡ [FINE-TUNING U-NET] Melatih model dengan {len(mask_files)} frame divalidasi...")
+        self.is_training_now = True
+        self.lbl_status.config(text="Status: ⚡ Training U-Net with GPU...", foreground="#ff5252")
 
-        train_samples = []
-        for mf in mask_files:
-            rel = os.path.relpath(mf, self.mask_base)
-            img_path = os.path.join(self.img_base, rel)
-            if os.path.exists(img_path):
-                img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-                msk = cv2.imread(mf, cv2.IMREAD_GRAYSCALE)
-                if img is not None and msk is not None and np.count_nonzero(msk) > 0:
-                    train_samples.append((img, msk))
+        # 1. Create Modal Progress Dialog
+        modal = tk.Toplevel(self.root)
+        modal.title("⚡ Fine-Tuning U-Net Model")
+        modal.geometry("480x210")
+        modal.configure(bg="#181818")
+        modal.resizable(False, False)
+        modal.transient(self.root)
+        modal.protocol("WM_DELETE_WINDOW", lambda: None)  # Prevent closing during training
 
-        if not train_samples:
-            self.is_training_now = False
-            self.lbl_status.config(text="Status: Tidak ada mask valid (>0 px) untuk training", foreground="#ffb74d")
-            return
+        # Center modal over root window
+        try:
+            self.root.update_idletasks()
+            rx = self.root.winfo_x()
+            ry = self.root.winfo_y()
+            rw = self.root.winfo_width()
+            rh = self.root.winfo_height()
+            mx = max(0, rx + (rw - 480) // 2)
+            my = max(0, ry + (rh - 210) // 2)
+            modal.geometry(f"+{mx}+{my}")
+        except Exception:
+            pass
 
-        self.model.train()
-        criterion = CombinedLoss()
-        optimizer = optim.Adam(self.model.parameters(), lr=0.0003, weight_decay=1e-5)
-        epochs = 15
+        modal.grab_set()  # Lock main window interaction
 
-        for ep in range(epochs):
-            total_loss = 0.0
-            np.random.shuffle(train_samples)
-            for img, msk in train_samples:
-                h, w = img.shape
-                tw = int(round(w / 32.0)) * 32
-                th = int(round(h / 32.0)) * 32
+        # Modal Content
+        lbl_m_title = ttk.Label(
+            modal, 
+            text="⚡ FINE-TUNING U-NET (ACTIVE LEARNING)", 
+            font=("Segoe UI", 11, "bold"), 
+            foreground="#00e5ff",
+            background="#181818"
+        )
+        lbl_m_title.pack(pady=(16, 4))
 
-                img_r = cv2.resize(img, (tw, th), interpolation=cv2.INTER_LINEAR)
-                msk_r = cv2.resize(msk, (tw, th), interpolation=cv2.INTER_NEAREST)
+        lbl_m_info = ttk.Label(
+            modal, 
+            text=f"Mempersiapkan dataset dari {len(mask_files)} mask tervalidasi...", 
+            font=("Segoe UI", 9), 
+            foreground="#e0e0e0",
+            background="#181818"
+        )
+        lbl_m_info.pack(pady=2)
 
-                x = (img_r.astype(np.float32) / 255.0 - 0.5) / 0.5
-                y = (msk_r > 127).astype(np.float32)
+        # Determinate Progress Bar
+        progress_var = tk.DoubleVar(value=0.0)
+        pbar = ttk.Progressbar(modal, orient="horizontal", length=420, mode="determinate", variable=progress_var, maximum=100.0)
+        pbar.pack(pady=12)
 
-                x_t = torch.tensor(x, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(self.device)
-                y_t = torch.tensor(y, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(self.device)
+        lbl_m_metrics = ttk.Label(
+            modal, 
+            text="Epoch 0/10 | Loss: -- | Device: CUDA", 
+            font=("Consolas", 9, "bold"), 
+            foreground="#00e676",
+            background="#181818"
+        )
+        lbl_m_metrics.pack(pady=2)
 
-                optimizer.zero_grad()
-                out = self.model(x_t)
-                loss = criterion(out, y_t)
-                loss.backward()
-                optimizer.step()
-                total_loss += loss.item()
+        lbl_m_lock_note = ttk.Label(
+            modal, 
+            text="🔒 GUI dikunci sementara untuk mencegah bentrok komputasi & bobot.", 
+            font=("Segoe UI", 8, "italic"), 
+            foreground="#888888",
+            background="#181818"
+        )
+        lbl_m_lock_note.pack(pady=(6, 0))
 
-        self.is_trained = True
-        torch.save({"model_state_dict": self.model.state_dict()}, self.model_checkpoint)
-        torch.save({"model_state_dict": self.model.state_dict()}, os.path.join(self.weights_dir, "best_model.pth"))
+        # 2. Worker Thread for Training
+        def worker():
+            try:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
-        print(f"✓ [OK] U-Net Model Updated! ({len(train_samples)} masks, Loss: {total_loss/len(train_samples):.4f})\n")
-        self.is_training_now = False
-        self.lbl_status.config(text="Status: U-Net Model Updated! (Active)", foreground="#00e676")
-        self.lbl_ai_indicator.config(text=f"🤖 U-Net: READY ({len(train_samples)} masks)", foreground="#00e676")
+                # Intelligent Active-Learning Sampling:
+                # Prioritize current trial (domain adaptation) + representative historical replay
+                curr_img_path = self.image_paths[self.current_idx] if self.image_paths else ""
+                curr_trial_rel = os.path.dirname(os.path.relpath(curr_img_path, self.img_base)) if curr_img_path else ""
+
+                current_trial_samples = []
+                historical_samples = []
+
+                for mf in mask_files:
+                    rel = os.path.relpath(mf, self.mask_base)
+                    img_path = os.path.join(self.img_base, rel)
+                    if os.path.exists(img_path):
+                        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                        msk = cv2.imread(mf, cv2.IMREAD_GRAYSCALE)
+                        if img is not None and msk is not None and np.count_nonzero(msk) > 0:
+                            if curr_trial_rel and os.path.dirname(rel) == curr_trial_rel:
+                                current_trial_samples.append((img, msk))
+                            else:
+                                historical_samples.append((img, msk))
+
+                np.random.shuffle(historical_samples)
+                # Keep up to 60 recent frames from active trial + 40 past replay frames
+                train_samples = current_trial_samples[-60:] + historical_samples[:40]
+                if not train_samples:
+                    train_samples = (current_trial_samples + historical_samples)[:80]
+
+                if not train_samples:
+                    print("[WARNING] Tidak ada pasangan gambar & mask yang valid.")
+                    return
+
+                # Target dimensions (must be multiple of 32 for U-Net)
+                target_h = int(round(train_samples[0][0].shape[0] / 32.0)) * 32
+                target_w = int(round(train_samples[0][0].shape[1] / 32.0)) * 32
+
+                x_list = []
+                y_list = []
+                for img, msk in train_samples:
+                    img_r = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+                    msk_r = cv2.resize(msk, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+                    x_norm = (img_r.astype(np.float32) / 255.0 - 0.5) / 0.5
+                    y_bin = (msk_r > 127).astype(np.float32)
+                    x_list.append(x_norm[np.newaxis, ...])
+                    y_list.append(y_bin[np.newaxis, ...])
+
+                x_arr = np.stack(x_list, axis=0)  # (N, 1, H, W)
+                y_arr = np.stack(y_list, axis=0)  # (N, 1, H, W)
+
+                dataset = TensorDataset(torch.from_numpy(x_arr).float(), torch.from_numpy(y_arr).float())
+                del x_list, y_list, x_arr, y_arr  # Free host memory immediately
+
+                # Safe batch size for 4GB VRAM GPU (RTX 2050): batch_size = 4
+                batch_size = 4 if len(train_samples) >= 4 else 2
+                loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
+
+                epochs = 6
+                criterion = CombinedLoss()
+                use_amp = (self.device.type == "cuda")
+                scaler = torch.cuda.amp.GradScaler() if use_amp else None
+
+                with self.model_lock:
+                    self.model.train()
+                    optimizer = optim.Adam(self.model.parameters(), lr=0.0003, weight_decay=1e-5)
+
+                    for ep in range(epochs):
+                        total_loss = 0.0
+                        num_batches = 0
+                        for batch_x, batch_y in loader:
+                            bx = batch_x.to(self.device, non_blocking=True)
+                            by = batch_y.to(self.device, non_blocking=True)
+
+                            optimizer.zero_grad(set_to_none=True)
+                            if use_amp:
+                                with torch.cuda.amp.autocast(dtype=torch.float16):
+                                    out = self.model(bx)
+                                    loss = criterion(out, by)
+                                scaler.scale(loss).backward()
+                                scaler.step(optimizer)
+                                scaler.update()
+                            else:
+                                out = self.model(bx)
+                                loss = criterion(out, by)
+                                loss.backward()
+                                optimizer.step()
+
+                            total_loss += loss.item()
+                            num_batches += 1
+                            del bx, by, out, loss
+
+                        avg_loss = total_loss / max(1, num_batches)
+                        pct = int(((ep + 1) / epochs) * 100)
+
+                        def update_ui_progress(p=pct, e=ep+1, l=avg_loss, n=len(train_samples)):
+                            progress_var.set(p)
+                            lbl_m_info.config(text=f"Melatih U-Net ({n} masks) | Batch Size: {batch_size} (FP16 AMP)")
+                            lbl_m_metrics.config(text=f"Epoch {e}/{epochs} | Loss: {l:.4f} | Device: {self.device.type.upper()}")
+
+                        self.root.after(0, update_ui_progress)
+
+                    # Save weights atomically
+                    self.is_trained = True
+                    torch.save({"model_state_dict": self.model.state_dict()}, self.model_checkpoint)
+                    best_path = os.path.join(self.weights_dir, "best_model.pth")
+                    torch.save({"model_state_dict": self.model.state_dict()}, best_path)
+                    print(f"✓ [OK] Fine-tuning U-Net selesai! ({len(train_samples)} masks, Final Loss: {avg_loss:.4f})")
+
+            except Exception as err:
+                print(f"[ERROR] Fine-tuning U-Net gagal: {err}")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            finally:
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+                def finalize():
+                    try:
+                        modal.grab_release()
+                        modal.destroy()
+                    except Exception:
+                        pass
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    self.is_training_now = False
+                    self.lbl_status.config(text="Status: U-Net Model Updated! (Active)", foreground="#00e676")
+                    self.lbl_ai_indicator.config(text=f"🤖 U-Net: READY ({len(mask_files)} masks)", foreground="#00e676")
+                    if on_complete:
+                        on_complete()
+
+                self.root.after(0, finalize)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
 
 
 def main():

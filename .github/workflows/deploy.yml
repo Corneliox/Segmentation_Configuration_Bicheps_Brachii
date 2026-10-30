@@ -1,0 +1,73 @@
+name: Build & Deploy Biceps Brachii Ultrasound Studio to GitHub Pages
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code with Git LFS
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install Web Dependencies
+        working-directory: web
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Prepare Public Model Assets
+        run: |
+          mkdir -p web/public/models
+          if [ -f weights/model_metadata.json ]; then
+            cp weights/model_metadata.json web/public/models/
+          fi
+          if [ -f weights/biceps_brachii_unet_quantized.onnx ]; then
+            cp weights/biceps_brachii_unet_quantized.onnx web/public/models/
+          elif [ -f weights/biceps_brachii_unet.onnx ]; then
+            cp weights/biceps_brachii_unet.onnx web/public/models/
+          fi
+
+      - name: Build Web Application
+        working-directory: web
+        run: npm run build
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

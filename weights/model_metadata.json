@@ -1,0 +1,50 @@
+{
+  "model_name": "Biceps_Brachii_US_Segmentation",
+  "version": "2.0.0",
+  "framework": "ONNX Runtime Web / WebAssembly",
+  "architecture": "Unet-resnet34",
+  "input_tensor": {
+    "name": "input",
+    "shape": [
+      1,
+      1,
+      512,
+      224
+    ],
+    "channels": 1,
+    "data_type": "float32",
+    "color_space": "Grayscale B-Mode",
+    "normalization": {
+      "scale": 255.0,
+      "mean": 0.5,
+      "std": 0.5,
+      "formula": "(pixel / 255.0 - 0.5) / 0.5"
+    }
+  },
+  "output_tensor": {
+    "name": "output",
+    "shape": [
+      1,
+      1,
+      512,
+      224
+    ],
+    "data_type": "float32",
+    "activation": "sigmoid",
+    "range": [
+      0.0,
+      1.0
+    ],
+    "binary_threshold": 0.5
+  },
+  "biomechanics": {
+    "pixel_spacing_mm": 0.1757,
+    "aperture_width_mm": 38.4,
+    "aperture_depth_mm": 89.96,
+    "active_contraction_threshold_mm": 2.0
+  },
+  "artifacts": {
+    "fp32_model": "biceps_brachii_unet.onnx",
+    "quantized_model": "biceps_brachii_unet_quantized.onnx"
+  }
+}
