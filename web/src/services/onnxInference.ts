@@ -1,4 +1,4 @@
-import * as ort from '@microsoft/onnxruntime-web';
+import * as ort from 'onnxruntime-web';
 import { ModelMetadata } from '../types/ultrasound';
 
 let inferenceSession: ort.InferenceSession | null = null;

@@ -12,7 +12,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['@microsoft/onnxruntime-web'],
+    exclude: ['onnxruntime-web'],
   },
   build: {
     target: 'esnext',
