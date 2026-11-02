@@ -36,9 +36,9 @@ export function App() {
       frequency_range_mhz: '5.0 - 12.0',
       element_count: 128,
       sound_velocity_m_s: 1540,
-      max_depth_mm: 45.0,
+      max_depth_mm: 89.96,
       native_fps: 112.0,
-      pixel_spacing_mm: 0.05,
+      pixel_spacing_mm: 0.1757,
       target_muscle: 'Biceps Brachii',
       notes: 'Standard dynamic 10-RM evaluation preset.',
     },
@@ -60,8 +60,8 @@ export function App() {
   ]);
   const [currentPreset, setCurrentPreset] = useState<UltrasoundPreset>(availablePresets[0]);
 
-  // Viewport, Tools and Canvas Options
-  const [viewportMode, setViewportMode] = useState<ViewportMode>('overlay');
+  // Viewport, Tools and Canvas Options (Default to Side-by-Side Dual View matching Python)
+  const [viewportMode, setViewportMode] = useState<ViewportMode>('side_by_side');
   const [toolMode, setToolMode] = useState<ToolMode>('pointer');
   const [brushRadius, setBrushRadius] = useState<number>(8);
   const [zoom, setZoom] = useState<number>(1.0);
@@ -421,7 +421,7 @@ export function App() {
       />
 
       {/* 2. Middle 3-Column Studio Work Area */}
-      <div className="flex-1 flex overflow-hidden relative">
+      <div className="flex-1 flex overflow-hidden relative min-h-0">
         {/* Left Photoshop Slim Tool Palette */}
         <PhotoshopToolPalette
           toolMode={toolMode}

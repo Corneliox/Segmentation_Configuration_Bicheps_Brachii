@@ -61,10 +61,22 @@ export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
     height: 512,
   });
 
-  // Track parent container dimensions via ResizeObserver
+  // Track parent container dimensions via ResizeObserver with immediate mount probe
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+
+    const updateSize = () => {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setContainerSize({
+          width: Math.floor(rect.width),
+          height: Math.floor(rect.height),
+        });
+      }
+    };
+
+    updateSize();
 
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -76,7 +88,11 @@ export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
     });
 
     observer.observe(el);
-    return () => observer.disconnect();
+    window.addEventListener('resize', updateSize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateSize);
+    };
   }, []);
 
   // Load and decode image
@@ -104,10 +120,11 @@ export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
   const imgW = imgNaturalSize.width;
   const imgH = imgNaturalSize.height;
 
-  // Margin padding inside canvas container
-  const pad = 24;
-  const availW = Math.max(100, containerSize.width - pad);
-  const availH = Math.max(100, containerSize.height - pad);
+  // Margin padding inside canvas container (preserve clearance for top HUD toolbar)
+  const padX = 24;
+  const padY = 56;
+  const availW = Math.max(120, containerSize.width - padX);
+  const availH = Math.max(120, containerSize.height - padY);
 
   let canvasW = 600;
   let canvasH = 500;
@@ -136,15 +153,17 @@ export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
       }
     } else {
       // Zoomed in
-      const baseH = Math.min(availH, 540);
-      canvasH = Math.round(baseH * zoom);
+      canvasH = Math.round(availH * zoom);
       canvasW = Math.round(canvasH * aspect);
     }
   }
 
   // Calculate actual total depth in mm of this ultrasound image
-  // If pixelSpacingMm is 0.1757 mm/px and height is 512 px => total depth is ~89.96 mm
-  const effectiveTotalDepthMm = Math.max(10, imgH * pixelSpacingMm);
+  // For 512 px height with 0.1757 mm/px calibration => total depth is 89.96 mm
+  const effectiveTotalDepthMm = Math.max(
+    10,
+    maxDepthMm > 0 && maxDepthMm < 150 ? maxDepthMm : imgH * pixelSpacingMm
+  );
 
   // Main Render Routine
   const renderCanvas = useCallback(() => {
@@ -507,7 +526,7 @@ export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
   return (
     <div
       ref={containerRef}
-      className="flex-1 flex flex-col items-center justify-center bg-[var(--canvas-bg)] p-3 overflow-auto relative select-none"
+      className="flex-1 flex flex-col items-center justify-center bg-[var(--canvas-bg)] pt-14 pb-3 px-3 overflow-auto relative select-none min-h-0 min-w-0"
     >
       {/* Top Floating Viewport Control Bar */}
       <div className="absolute top-4 left-6 z-20 flex items-center gap-1.5 bg-[var(--bg-surface)]/90 backdrop-blur-md px-2.5 py-1.5 rounded-xl border border-[var(--border-subtle)] shadow-xl text-xs font-semibold">

@@ -14,9 +14,9 @@
       "sound_velocity_m_s": 1540,
       "dynamic_range_db": 65,
       "focal_depth_mm": 22.0,
-      "max_depth_mm": 45.0,
+      "max_depth_mm": 89.96,
       "native_fps": 112.0,
-      "pixel_spacing_mm": 0.05,
+      "pixel_spacing_mm": 0.1757,
       "target_muscle": "Biceps Brachii",
       "notes": "Standard preset for dynamic flexion 10-RM evaluations (Azmi and Tissa cohorts)."
     },
