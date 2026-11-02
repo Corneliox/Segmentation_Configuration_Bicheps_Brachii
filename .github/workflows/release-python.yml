@@ -85,6 +85,38 @@ jobs:
           Write-Output "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
           Write-Output "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
 
+      - name: Compile Single-File Windows Installer Wizard (Setup.exe)
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "${{ github.event.inputs.release_tag }}" }
+          if (-not $tag) { $tag = "v2.1.0" }
+
+          $iscc = (Get-Command "iscc" -ErrorAction SilentlyContinue).Source
+          if (-not $iscc -and (Test-Path "C:\Program Files (x86)\Inno Setup 6\iscc.exe")) {
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\iscc.exe"
+          }
+          if (-not $iscc) {
+            choco install innosetup --no-progress
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\iscc.exe"
+          }
+
+          Write-Host "Compiling Inno Setup wizard using: $iscc"
+          & $iscc "/DAppVersion=$tag" installer.iss
+
+          $setupItem = Get-ChildItem -Path "dist_installer\*.exe" | Select-Object -First 1
+          if (-not $setupItem) {
+            Write-Error "Inno Setup output executable not found in dist_installer!"
+            exit 1
+          }
+
+          $setupPath = $setupItem.FullName
+          $setupName = $setupItem.Name
+          $setupHash = (Get-FileHash -Path $setupPath -Algorithm SHA256).Hash
+          "$setupHash  $setupName" | Out-File -FilePath "$setupPath.sha256" -Encoding ascii
+
+          Write-Output "SETUP_PATH=$setupPath" >> $env:GITHUB_ENV
+          Write-Output "SETUP_NAME=$setupName" >> $env:GITHUB_ENV
+
       - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
@@ -94,14 +126,16 @@ jobs:
           body: |
             ## Biceps Brachii Ultrasound Segmentation & Biomechanics Studio ${{ env.RELEASE_TAG }}
             
-            Standalone Windows desktop release with full PyTorch U-Net inference, real-time aponeurosis tracking, and Google Gemini medical UI palette.
+            Official Standalone Windows Installer Wizard & Portable Desktop Suite. Everything is pre-configured in a single installation.
             
-            ### Quick Start
-            1. Download `${{ env.ZIP_NAME }}` below.
-            2. Extract all contents into a clean folder.
-            3. Double-click `Biceps_Brachii_Pipeline_Studio.exe` to launch the application.
+            ### Quick Start (Recommended Single-Click Installer)
+            1. Download `${{ env.SETUP_NAME }}` below.
+            2. Run the installer wizard to automatically set up the application, PyTorch U-Net weights, MATLAB bridge, and Telemed ArtUs presets.
+            3. Launch "Biceps Brachii Pipeline Studio" directly from the Desktop or Start Menu. No Python, batch files, or terminal setup required!
             
-            ### Included Capabilities
+            *(Portable standalone `.zip` also provided below for zero-install workflows)*
+            
+            ### Capabilities
             - **Mode A**: Raw `.BIN` extraction with fallback to Python RF decoder if MATLAB is absent.
             - **Mode B**: Instant batch ingestion of pre-extracted sonogram sequences (`.png`, `.jpg`, `.bmp`).
             - **Deep Learning**: Real-time U-Net muscle segmentation with superficial and deep fascia tracking.
@@ -111,5 +145,7 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: |
+            ${{ env.SETUP_PATH }}
+            ${{ env.SETUP_PATH }}.sha256
             ${{ env.ZIP_NAME }}
             ${{ env.ZIP_NAME }}.sha256
