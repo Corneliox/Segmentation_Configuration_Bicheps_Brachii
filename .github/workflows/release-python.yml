@@ -1,0 +1,115 @@
+name: Build & Release Windows Executable Studio
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release Tag (e.g. v2.1.0)'
+        required: false
+        default: 'v2.1.0'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "release-python-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  build-windows-executable:
+    name: Build Biceps Brachii Studio (Windows x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Code with Git LFS
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: recursive
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install PyTorch CPU & Build Dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          # Install CPU PyTorch to keep release package lightweight (< 500MB)
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install PyQt5 opencv-python matplotlib pyyaml pandas scipy pyinstaller
+
+      - name: Compile Windows Executable via PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller biceps_studio.spec --noconfirm --clean
+
+      - name: Ensure Supporting Assets in Dist Folder
+        shell: pwsh
+        run: |
+          $distApp = "dist\Biceps_Brachii_Pipeline_Studio"
+          if (-not (Test-Path $distApp)) {
+            Write-Error "PyInstaller output directory not found: $distApp"
+            exit 1
+          }
+          if (Test-Path "presets") {
+            Copy-Item -Path "presets" -Destination "$distApp\presets" -Recurse -Force
+          }
+          if (Test-Path "configs") {
+            Copy-Item -Path "configs" -Destination "$distApp\configs" -Recurse -Force
+          }
+          if (Test-Path "weights") {
+            Copy-Item -Path "weights" -Destination "$distApp\weights" -Recurse -Force
+          }
+          if (Test-Path "matlab_converter") {
+            Copy-Item -Path "matlab_converter" -Destination "$distApp\matlab_converter" -Recurse -Force
+          }
+
+      - name: Package Release Archive (.zip) & Compute SHA-256
+        id: package
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "${{ github.event.inputs.release_tag }}" }
+          if (-not $tag) { $tag = "v2.1.0" }
+          
+          $zipName = "Biceps_Brachii_Pipeline_Studio_${tag}_Windows_x64.zip"
+          Compress-Archive -Path "dist\Biceps_Brachii_Pipeline_Studio\*" -DestinationPath $zipName -Force
+
+          $hash = (Get-FileHash -Path $zipName -Algorithm SHA256).Hash
+          "$hash  $zipName" | Out-File -FilePath "$zipName.sha256" -Encoding ascii
+
+          Write-Output "ZIP_NAME=$zipName" >> $env:GITHUB_ENV
+          Write-Output "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+
+      - name: Publish to GitHub Releases
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Biceps Brachii Pipeline Studio ${{ env.RELEASE_TAG }} (Windows x64)
+          body: |
+            ## Biceps Brachii Ultrasound Segmentation & Biomechanics Studio ${{ env.RELEASE_TAG }}
+            
+            Standalone Windows desktop release with full PyTorch U-Net inference, real-time aponeurosis tracking, and Google Gemini medical UI palette.
+            
+            ### Quick Start
+            1. Download `${{ env.ZIP_NAME }}` below.
+            2. Extract all contents into a clean folder.
+            3. Double-click `Biceps_Brachii_Pipeline_Studio.exe` to launch the application.
+            
+            ### Included Capabilities
+            - **Mode A**: Raw `.BIN` extraction with fallback to Python RF decoder if MATLAB is absent.
+            - **Mode B**: Instant batch ingestion of pre-extracted sonogram sequences (`.png`, `.jpg`, `.bmp`).
+            - **Deep Learning**: Real-time U-Net muscle segmentation with superficial and deep fascia tracking.
+            - **Telemetry**: Live muscle thickness waveforms (mm) and peak contraction strain metrics.
+            - **Presets Hub**: Transducer calibration configurations for Telemed ArtUs probes.
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            ${{ env.ZIP_NAME }}
+            ${{ env.ZIP_NAME }}.sha256

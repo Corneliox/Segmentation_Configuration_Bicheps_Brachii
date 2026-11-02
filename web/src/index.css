@@ -2,28 +2,103 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  /* Google Gemini Dark Palette (Default) */
+  --bg-app: #131314;
+  --bg-surface: #1e1f20;
+  --bg-card: #282a2c;
+  --bg-card-hover: #333538;
+  --border-subtle: #37393b;
+  --border-strong: #444746;
+  --text-primary: #e3e3e3;
+  --text-secondary: #c4c7c5;
+  --text-muted: #8e918f;
+
+  /* Gemini Accent Colors */
+  --gemini-blue: #a8c7fa;
+  --gemini-blue-hover: #8ab4f8;
+  --gemini-purple: #d0bcff;
+  --gemini-emerald: #c4eed0;
+  --gemini-coral: #f28b82;
+  --gemini-yellow: #fde293;
+
+  /* Photoshop Studio Work Area */
+  --canvas-bg: #0e0e0f;
+  --timeline-bg: #18191a;
+  --timeline-track: #282a2c;
+  --accent-gradient: linear-gradient(135deg, #4285f4 0%, #9b72cf 50%, #d96570 100%);
+  --sparkle-glow: rgba(168, 199, 250, 0.25);
+}
+
+[data-theme='light'] {
+  /* Google Gemini Light Palette */
+  --bg-app: #f0f4f9;
+  --bg-surface: #ffffff;
+  --bg-card: #f8fafd;
+  --bg-card-hover: #e9eef6;
+  --border-subtle: #e0e3e7;
+  --border-strong: #c4c7c5;
+  --text-primary: #1f1f1f;
+  --text-secondary: #444746;
+  --text-muted: #747775;
+
+  /* Gemini Light Accent Colors */
+  --gemini-blue: #0b57d0;
+  --gemini-blue-hover: #1a73e8;
+  --gemini-purple: #7c4dff;
+  --gemini-emerald: #1e8e3e;
+  --gemini-coral: #d93025;
+  --gemini-yellow: #e37400;
+
+  /* Photoshop Studio Work Area (Light) */
+  --canvas-bg: #dbe2ec;
+  --timeline-bg: #ffffff;
+  --timeline-track: #e9eef6;
+  --accent-gradient: linear-gradient(135deg, #1a73e8 0%, #7c4dff 50%, #ea4335 100%);
+  --sparkle-glow: rgba(11, 87, 208, 0.2);
+}
+
 @layer base {
   body {
-    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    font-family: 'Google Sans', 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    user-select: none;
+    overflow-x: hidden;
   }
 }
 
-/* Custom scrollbars for high-density ultrasound filmstrips */
+/* Precision Photoshop Studio Scrollbars */
 ::-webkit-scrollbar {
-  height: 8px;
-  width: 8px;
-  background: #0b1120;
+  height: 6px;
+  width: 6px;
+  background: var(--bg-app);
 }
 
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: var(--bg-surface);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 4px;
+  background: var(--border-strong);
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #0284c7;
+  background: var(--gemini-blue);
+}
+
+/* Glass & Glow utilities */
+.gemini-gradient-text {
+  background: var(--accent-gradient);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gemini-sparkle-border {
+  border-image: var(--accent-gradient) 1;
+}
+
+.photoshop-panel-shadow {
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
 }

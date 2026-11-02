@@ -55,4 +55,35 @@ export interface BiomechanicsSummary {
   totalFrames: number;
 }
 
-export type ToolMode = 'pen' | 'eraser';
+export interface UltrasoundPreset {
+  id: string;
+  name: string;
+  probe_model: string;
+  probe_type: string;
+  frequency_mhz: number;
+  frequency_range_mhz?: string;
+  element_count: number;
+  pitch_mm?: number;
+  sound_velocity_m_s: number;
+  dynamic_range_db?: number;
+  focal_depth_mm?: number;
+  max_depth_mm: number;
+  native_fps: number;
+  pixel_spacing_mm: number;
+  target_muscle: string;
+  notes?: string;
+}
+
+export interface LayerVisibilityState {
+  showMask: boolean;
+  showSuperficial: boolean;
+  showDeep: boolean;
+  showGrid: boolean;
+  showRawBMode: boolean;
+  maskOpacity: number;
+}
+
+export type ToolMode = 'pointer' | 'pan' | 'pen' | 'eraser' | 'caliper' | 'zoom';
+export type ViewportMode = 'overlay' | 'side_by_side' | 'raw' | 'filmstrip';
+export type AppTheme = 'dark' | 'light';
+export type AppLanguage = 'en' | 'zh';

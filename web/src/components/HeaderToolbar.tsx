@@ -1,173 +1,279 @@
 import React from 'react';
-import { ToolMode } from '../types/ultrasound';
 import {
-  PenTool,
-  Eraser,
-  RotateCcw,
-  Download,
-  FileSpreadsheet,
+  Sparkles,
+  Sun,
+  Moon,
+  Globe,
+  Database,
   Cpu,
-  Upload,
-  ZoomIn,
+  FolderOpen,
+  Image as ImageIcon,
+  CheckCircle2,
+  Settings,
+  ChevronDown,
+  Layers,
+  Activity,
+  Sliders,
 } from 'lucide-react';
+import { AppTheme, AppLanguage, UltrasoundPreset, ViewportMode } from '../types/ultrasound';
+import { TRANSLATIONS } from '../utils/translations';
 
 interface HeaderToolbarProps {
-  toolMode: ToolMode;
-  onSetToolMode: (mode: ToolMode) => void;
-  brushRadius: number;
-  onSetBrushRadius: (val: number) => void;
-  zoom: number;
-  onSetZoom: (val: number) => void;
-  onUndo: () => void;
-  onExportCsv: () => void;
-  onExportPng: () => void;
+  theme: AppTheme;
+  onToggleTheme: () => void;
+  language: AppLanguage;
+  onToggleLanguage: () => void;
+  onOpenHub: () => void;
   onRunAiSegmentation: () => void;
-  onFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   isAiRunning: boolean;
+  onUploadImage: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onUploadFolder: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  currentPreset: UltrasoundPreset;
+  availablePresets: UltrasoundPreset[];
+  onSelectPreset: (preset: UltrasoundPreset) => void;
+  selectedSample: string;
+  onSelectSample: (sampleId: string) => void;
+  viewportMode: ViewportMode;
+  onSetViewportMode: (mode: ViewportMode) => void;
 }
 
 export const HeaderToolbar: React.FC<HeaderToolbarProps> = ({
-  toolMode,
-  onSetToolMode,
-  brushRadius,
-  onSetBrushRadius,
-  zoom,
-  onSetZoom,
-  onUndo,
-  onExportCsv,
-  onExportPng,
+  theme,
+  onToggleTheme,
+  language,
+  onToggleLanguage,
+  onOpenHub,
   onRunAiSegmentation,
-  onFileUpload,
   isAiRunning,
+  onUploadImage,
+  onUploadFolder,
+  currentPreset,
+  availablePresets,
+  onSelectPreset,
+  selectedSample,
+  onSelectSample,
+  viewportMode,
+  onSetViewportMode,
 }) => {
+  const t = TRANSLATIONS[language];
+
   return (
-    <div className="bg-[#0f172a] border border-[#334155] rounded-xl p-3 shadow-xl flex flex-wrap items-center justify-between gap-3">
-      {/* Left: App Title and Upload */}
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2 pr-3 border-r border-[#334155]">
-          <span className="p-1.5 rounded-lg bg-[#0284c7] text-white">
-            <Cpu size={18} />
-          </span>
-          <div>
-            <h1 className="text-sm font-black text-white leading-tight">
-              Biceps Brachii <span className="text-[#38bdf8]">US Studio</span>
-            </h1>
-            <p className="text-[10px] text-[#94a3b8]">AI Segmentation & Kinematics</p>
+    <header className="border-b border-[var(--border-subtle)] bg-[var(--bg-surface)] text-[var(--text-primary)] select-none">
+      {/* Top Photoshop Menu Line */}
+      <div className="flex items-center justify-between px-3 py-1.5 text-xs border-b border-[var(--border-subtle)]/60 bg-[var(--bg-surface)]/80">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1.5 font-bold tracking-tight">
+            <span className="p-1 rounded-md bg-[var(--bg-card)] text-[var(--gemini-blue)]">
+              <Sparkles size={14} className="text-[var(--gemini-blue)]" />
+            </span>
+            <span className="font-extrabold text-xs tracking-wider">
+              GEMINI <span className="gemini-gradient-text">ULTRASOUND</span>
+            </span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--bg-card)] border border-[var(--border-subtle)] text-[var(--text-muted)] font-mono">
+              {t.studio_badge}
+            </span>
           </div>
+
+          {/* Photoshop Top Menus */}
+          <nav className="hidden md:flex items-center gap-1 text-[var(--text-secondary)]">
+            <button className="px-2 py-0.5 rounded hover:bg-[var(--bg-card-hover)] hover:text-[var(--text-primary)] transition">
+              {t.menu_file}
+            </button>
+            <button className="px-2 py-0.5 rounded hover:bg-[var(--bg-card-hover)] hover:text-[var(--text-primary)] transition">
+              {t.menu_edit}
+            </button>
+            <button className="px-2 py-0.5 rounded hover:bg-[var(--bg-card-hover)] hover:text-[var(--text-primary)] transition">
+              {t.menu_presets}
+            </button>
+            <button className="px-2 py-0.5 rounded hover:bg-[var(--bg-card-hover)] hover:text-[var(--text-primary)] transition">
+              {t.menu_layers}
+            </button>
+            <button className="px-2 py-0.5 rounded hover:bg-[var(--bg-card-hover)] hover:text-[var(--text-primary)] transition">
+              {t.menu_view}
+            </button>
+            <button className="px-2 py-0.5 rounded hover:bg-[var(--bg-card-hover)] hover:text-[var(--text-primary)] transition">
+              {t.menu_export}
+            </button>
+          </nav>
         </div>
 
-        {/* Upload Button */}
-        <label className="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1e293b] hover:bg-[#334155] text-xs font-bold text-white border border-[#475569] transition">
-          <Upload size={14} className="text-[#38bdf8]" />
-          <span>Upload Image</span>
-          <input
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={onFileUpload}
-          />
-        </label>
+        {/* Right Top Status & Theme/Lang */}
+        <div className="flex items-center gap-2">
+          {/* Active Preset Tag */}
+          <div className="hidden lg:flex items-center gap-1 text-[11px] text-[var(--text-muted)] bg-[var(--bg-card)] px-2 py-0.5 rounded border border-[var(--border-subtle)]">
+            <Activity size={12} className="text-[var(--gemini-emerald)]" />
+            <span>{currentPreset.probe_model}</span>
+            <span className="text-[var(--gemini-blue)] font-mono">({currentPreset.pixel_spacing_mm} mm/px)</span>
+          </div>
+
+          {/* Language Switcher */}
+          <button
+            onClick={onToggleLanguage}
+            className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-subtle)] text-[11px] font-medium transition"
+            title="Toggle English / 繁體中文"
+          >
+            <Globe size={12} className="text-[var(--gemini-blue)]" />
+            <span>{language === 'en' ? 'EN' : '繁中'}</span>
+          </button>
+
+          {/* Theme Switcher */}
+          <button
+            onClick={onToggleTheme}
+            className="flex items-center gap-1 px-2 py-0.5 rounded bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-subtle)] text-[11px] font-medium transition"
+            title="Toggle Gemini Dark / Light"
+          >
+            {theme === 'dark' ? (
+              <>
+                <Moon size={12} className="text-[var(--gemini-purple)]" />
+                <span>Night</span>
+              </>
+            ) : (
+              <>
+                <Sun size={12} className="text-[var(--gemini-coral)]" />
+                <span>Day</span>
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
-      {/* Middle: Drawing Tools and Sliders */}
-      <div className="flex items-center gap-3 flex-wrap">
-        {/* Pen Button */}
-        <button
-          onClick={() => onSetToolMode('pen')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition border ${
-            toolMode === 'pen'
-              ? 'bg-[#dc2626] border-[#ef4444] text-white shadow-lg'
-              : 'bg-[#1e293b] border-[#334155] text-[#94a3b8] hover:bg-[#334155]'
-          }`}
-        >
-          <PenTool size={14} />
-          <span>Kuas Merah</span>
-        </button>
+      {/* Main Studio Action Ribbon */}
+      <div className="px-3 py-2 flex flex-wrap items-center justify-between gap-3">
+        {/* Left: Preset Selector, Sample Trials & Ingestion */}
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Preset Selector */}
+          <div className="flex items-center gap-1.5 bg-[var(--bg-card)] px-2.5 py-1.5 rounded-lg border border-[var(--border-subtle)] text-xs">
+            <Settings size={14} className="text-[var(--gemini-blue)]" />
+            <span className="text-[var(--text-muted)] font-medium">Preset:</span>
+            <select
+              value={currentPreset.id}
+              onChange={(e) => {
+                const found = availablePresets.find((p) => p.id === e.target.value);
+                if (found) onSelectPreset(found);
+              }}
+              className="bg-transparent text-[var(--text-primary)] font-semibold outline-none cursor-pointer text-xs pr-1"
+            >
+              {availablePresets.map((p) => (
+                <option key={p.id} value={p.id} className="bg-[var(--bg-card)] text-[var(--text-primary)]">
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        {/* Eraser Button */}
-        <button
-          onClick={() => onSetToolMode('eraser')}
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition border ${
-            toolMode === 'eraser'
-              ? 'bg-[#0284c7] border-[#38bdf8] text-white shadow-lg'
-              : 'bg-[#1e293b] border-[#334155] text-[#94a3b8] hover:bg-[#334155]'
-          }`}
-        >
-          <Eraser size={14} />
-          <span>Penghapus</span>
-        </button>
+          {/* Sample Trial Selector */}
+          <div className="flex items-center gap-1.5 bg-[var(--bg-card)] px-2.5 py-1.5 rounded-lg border border-[var(--border-subtle)] text-xs">
+            <Database size={14} className="text-[var(--gemini-purple)]" />
+            <span className="text-[var(--text-muted)] font-medium">Sample:</span>
+            <select
+              value={selectedSample}
+              onChange={(e) => onSelectSample(e.target.value)}
+              className="bg-transparent text-[var(--text-primary)] font-semibold outline-none cursor-pointer text-xs pr-1"
+            >
+              <option value="azmi" className="bg-[var(--bg-card)] text-[var(--text-primary)]">
+                {t.sample_azmi}
+              </option>
+              <option value="tissa" className="bg-[var(--bg-card)] text-[var(--text-primary)]">
+                {t.sample_tissa}
+              </option>
+              <option value="synthetic" className="bg-[var(--bg-card)] text-[var(--text-primary)]">
+                {t.sample_synthetic}
+              </option>
+            </select>
+          </div>
 
-        {/* Brush Size Slider */}
-        <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-[#1e293b] border border-[#334155]">
-          <span className="text-[11px] text-[#94a3b8] font-bold">Kuas:</span>
-          <input
-            type="range"
-            min={3}
-            max={30}
-            value={brushRadius}
-            onChange={(e) => onSetBrushRadius(Number(e.target.value))}
-            className="w-16 accent-[#00f2fe] cursor-pointer"
-          />
-          <span className="text-[11px] text-white font-mono w-4">{brushRadius}</span>
+          {/* Viewport Mode Switcher (Overlay / Side-by-Side / Raw / Filmstrip) */}
+          <div className="flex items-center bg-[var(--bg-card)] p-0.5 rounded-lg border border-[var(--border-subtle)] text-xs">
+            <button
+              onClick={() => onSetViewportMode('overlay')}
+              className={`px-2 py-1 rounded-md text-xs font-semibold transition ${
+                viewportMode === 'overlay'
+                  ? 'bg-[var(--gemini-blue)] text-black shadow-sm font-bold'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              Overlay
+            </button>
+            <button
+              onClick={() => onSetViewportMode('side_by_side')}
+              className={`px-2 py-1 rounded-md text-xs font-semibold transition ${
+                viewportMode === 'side_by_side'
+                  ? 'bg-[var(--gemini-blue)] text-black shadow-sm font-bold'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              Dual View
+            </button>
+            <button
+              onClick={() => onSetViewportMode('raw')}
+              className={`px-2 py-1 rounded-md text-xs font-semibold transition ${
+                viewportMode === 'raw'
+                  ? 'bg-[var(--gemini-blue)] text-black shadow-sm font-bold'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              Raw
+            </button>
+            <button
+              onClick={() => onSetViewportMode('filmstrip')}
+              className={`px-2 py-1 rounded-md text-xs font-semibold transition ${
+                viewportMode === 'filmstrip'
+                  ? 'bg-[var(--gemini-blue)] text-black shadow-sm font-bold'
+                  : 'text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+              }`}
+            >
+              Filmstrip
+            </button>
+          </div>
+
+          {/* Open Image File Button */}
+          <label className="cursor-pointer flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] text-xs font-semibold border border-[var(--border-subtle)] transition">
+            <ImageIcon size={14} className="text-[var(--gemini-emerald)]" />
+            <span>{t.btn_upload_image}</span>
+            <input type="file" accept="image/*" className="hidden" onChange={onUploadImage} />
+          </label>
+
+          {/* Open Folder / Cine Frames */}
+          <label className="cursor-pointer flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] text-xs font-semibold border border-[var(--border-subtle)] transition">
+            <FolderOpen size={14} className="text-[var(--gemini-yellow)]" />
+            <span>{t.btn_upload_folder}</span>
+            <input
+              type="file"
+              // @ts-ignore: webkitdirectory is standard for folder picker
+              webkitdirectory=""
+              directory=""
+              multiple
+              className="hidden"
+              onChange={onUploadFolder}
+            />
+          </label>
         </div>
 
-        {/* Zoom Slider */}
-        <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-[#1e293b] border border-[#334155]">
-          <ZoomIn size={14} className="text-[#94a3b8]" />
-          <span className="text-[11px] text-[#94a3b8] font-bold">Zoom:</span>
-          <input
-            type="range"
-            min={0.8}
-            max={3.0}
-            step={0.1}
-            value={zoom}
-            onChange={(e) => onSetZoom(Number(e.target.value))}
-            className="w-16 accent-[#38bdf8] cursor-pointer"
-          />
-          <span className="text-[11px] text-white font-mono w-7">{zoom.toFixed(1)}x</span>
+        {/* Right: Hub Modal & AI Run Action */}
+        <div className="flex items-center gap-2">
+          {/* Sample Datasets & Presets Hub Modal Trigger */}
+          <button
+            onClick={onOpenHub}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--bg-card)] hover:bg-[var(--bg-card-hover)] border border-[var(--border-subtle)] text-xs font-bold text-[var(--gemini-purple)] transition"
+          >
+            <Database size={14} />
+            <span>{t.btn_sample_hub}</span>
+          </button>
+
+          {/* AI Auto-Segmentation Button */}
+          <button
+            onClick={onRunAiSegmentation}
+            disabled={isAiRunning}
+            className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-extrabold text-black transition shadow-lg disabled:opacity-50"
+            style={{
+              background: 'linear-gradient(135deg, #a8c7fa 0%, #d0bcff 100%)',
+            }}
+          >
+            <Sparkles size={14} className={isAiRunning ? 'animate-spin' : ''} />
+            <span>{isAiRunning ? t.btn_running_ai : t.btn_run_ai}</span>
+          </button>
         </div>
-
-        {/* Undo Button */}
-        <button
-          onClick={onUndo}
-          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#1e293b] hover:bg-[#334155] text-xs font-bold text-white border border-[#334155] transition"
-          title="Undo (Ctrl+Z)"
-        >
-          <RotateCcw size={13} />
-          <span>Undo</span>
-        </button>
       </div>
-
-      {/* Right: AI Segmentation & Export Actions */}
-      <div className="flex items-center gap-2">
-        {/* Run AI Button */}
-        <button
-          onClick={onRunAiSegmentation}
-          disabled={isAiRunning}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#059669] hover:bg-[#047857] text-xs font-bold text-white border border-[#10b981] shadow-lg transition disabled:opacity-50"
-        >
-          <Cpu size={14} className={isAiRunning ? 'animate-spin' : ''} />
-          <span>{isAiRunning ? 'AI Segmenting...' : 'Auto Segment (AI)'}</span>
-        </button>
-
-        {/* Export CSV */}
-        <button
-          onClick={onExportCsv}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1e293b] hover:bg-[#334155] text-xs font-bold text-white border border-[#334155] transition"
-        >
-          <FileSpreadsheet size={14} className="text-[#4ade80]" />
-          <span>CSV</span>
-        </button>
-
-        {/* Export PNG */}
-        <button
-          onClick={onExportPng}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0284c7] hover:bg-[#0369a1] text-xs font-bold text-white border border-[#38bdf8] transition"
-        >
-          <Download size={14} />
-          <span>Export PNG</span>
-        </button>
-      </div>
-    </div>
+    </header>
   );
 };

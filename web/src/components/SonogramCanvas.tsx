@@ -1,9 +1,13 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
-import { ToolMode } from '../types/ultrasound';
-import { mmToPixel, pixelToMm, frameToPixelX, pixelXToFrame } from '../utils/calibration';
+import { ToolMode, LayerVisibilityState, ViewportMode } from '../types/ultrasound';
+import { Maximize2, ZoomIn, ZoomOut, Eye, Layers } from 'lucide-react';
 
 interface SonogramCanvasProps {
-  imageSrc: string | null;
+  viewportMode: ViewportMode;
+  onSetViewportMode: (mode: ViewportMode) => void;
+  currentFrameImage: string | null;
+  currentFrameIdx: number;
+  totalFrames: number;
   superficialMm: number[];
   deepMm: number[];
   redMm: number[];
@@ -11,13 +15,21 @@ interface SonogramCanvasProps {
   toolMode: ToolMode;
   brushRadius: number;
   zoom: number;
+  onSetZoom: (z: number) => void;
+  layerVisibility: LayerVisibilityState;
+  pixelSpacingMm: number;
+  maxDepthMm: number;
   onRedCurveChange: (newRedMm: number[]) => void;
   onHoverData?: (timeSec: number, frame: number, depthMm: number, thicknessMm: number) => void;
   canvasRef?: React.RefObject<HTMLCanvasElement>;
 }
 
 export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
-  imageSrc,
+  viewportMode,
+  onSetViewportMode,
+  currentFrameImage,
+  currentFrameIdx,
+  totalFrames,
   superficialMm,
   deepMm,
   redMm,
@@ -25,250 +37,434 @@ export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
   toolMode,
   brushRadius,
   zoom,
+  onSetZoom,
+  layerVisibility,
+  pixelSpacingMm,
+  maxDepthMm,
   onRedCurveChange,
   onHoverData,
   canvasRef: externalCanvasRef,
 }) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const internalCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasRef = externalCanvasRef || internalCanvasRef;
   const isDrawingRef = useRef(false);
   const imgElementRef = useRef<HTMLImageElement | null>(null);
 
-  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null);
+  const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+  const [containerSize, setContainerSize] = useState<{ width: number; height: number }>({
+    width: 800,
+    height: 600,
+  });
+  const [imgNaturalSize, setImgNaturalSize] = useState<{ width: number; height: number }>({
+    width: 219,
+    height: 512,
+  });
 
-  const baseWidth = 2400;
-  const canvasHeight = 520;
-  const canvasWidth = Math.round(baseWidth * zoom);
-  const maxDepthMm = 89.96;
-
-  // Load and cache background image
+  // Track parent container dimensions via ResizeObserver
   useEffect(() => {
-    if (!imageSrc) return;
+    const el = containerRef.current;
+    if (!el) return;
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setContainerSize({ width: Math.floor(width), height: Math.floor(height) });
+        }
+      }
+    });
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Load and decode image
+  useEffect(() => {
+    if (!currentFrameImage) {
+      imgElementRef.current = null;
+      renderCanvas();
+      return;
+    }
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.src = imageSrc;
+    img.src = currentFrameImage;
     img.onload = () => {
       imgElementRef.current = img;
+      setImgNaturalSize({
+        width: img.naturalWidth || 219,
+        height: img.naturalHeight || 512,
+      });
       renderCanvas();
     };
-  }, [imageSrc]);
+  }, [currentFrameImage]);
 
-  // Main Render Loop
+  // Compute responsive canvas dimensions with NO aspect ratio clipping
+  const isSideBySide = viewportMode === 'side_by_side';
+  const imgW = imgNaturalSize.width;
+  const imgH = imgNaturalSize.height;
+
+  // Margin padding inside canvas container
+  const pad = 24;
+  const availW = Math.max(100, containerSize.width - pad);
+  const availH = Math.max(100, containerSize.height - pad);
+
+  let canvasW = 600;
+  let canvasH = 500;
+
+  if (viewportMode === 'filmstrip') {
+    // Panoramic filmstrip view
+    if (zoom <= 1.0) {
+      canvasW = availW;
+      canvasH = Math.min(availH, Math.max(300, Math.round(availW * 0.35)));
+    } else {
+      canvasW = Math.round(availW * zoom);
+      canvasH = Math.min(availH, 480);
+    }
+  } else {
+    // Cine modes: overlay, side_by_side, raw
+    const aspect = isSideBySide ? (imgW * 2) / imgH : imgW / imgH;
+
+    if (zoom <= 1.0) {
+      // Fit to Screen (100% completely visible inside container without cut off)
+      if (availW / availH > aspect) {
+        canvasH = availH;
+        canvasW = Math.round(availH * aspect);
+      } else {
+        canvasW = availW;
+        canvasH = Math.round(availW / aspect);
+      }
+    } else {
+      // Zoomed in
+      const baseH = Math.min(availH, 540);
+      canvasH = Math.round(baseH * zoom);
+      canvasW = Math.round(canvasH * aspect);
+    }
+  }
+
+  // Calculate actual total depth in mm of this ultrasound image
+  // If pixelSpacingMm is 0.1757 mm/px and height is 512 px => total depth is ~89.96 mm
+  const effectiveTotalDepthMm = Math.max(10, imgH * pixelSpacingMm);
+
+  // Main Render Routine
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // 1. Draw Background Ultrasound Sonogram
-    ctx.fillStyle = '#0b1120';
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    ctx.clearRect(0, 0, canvasW, canvasH);
 
-    if (imgElementRef.current) {
-      ctx.drawImage(imgElementRef.current, 0, 0, canvasWidth, canvasHeight);
-    } else {
-      // Procedural fallback medical grid
-      ctx.strokeStyle = '#1e293b';
-      ctx.lineWidth = 1;
-      for (let x = 0; x < canvasWidth; x += 40) {
+    // Dark neutral artboard background
+    ctx.fillStyle = '#0a0a0c';
+    ctx.fillRect(0, 0, canvasW, canvasH);
+
+    const fIdx = Math.min(Math.max(0, currentFrameIdx), totalFrames - 1);
+    const supDepth = superficialMm[fIdx] || 14.0;
+    const deepDepth = deepMm[fIdx] || 28.0;
+
+    // Convert depth in mm to canvas pixel Y
+    const depthToY = (depthMm: number) => {
+      return (depthMm / effectiveTotalDepthMm) * canvasH;
+    };
+
+    if (viewportMode === 'side_by_side') {
+      // -------------------------------------------------------------
+      // 1. SIDE-BY-SIDE DUAL VIEW (LEFT: RAW, RIGHT: AI MASK)
+      // -------------------------------------------------------------
+      const halfW = canvasW / 2;
+
+      // Left Panel: Raw B-Mode
+      if (imgElementRef.current) {
+        ctx.drawImage(imgElementRef.current, 0, 0, halfW, canvasH);
+      } else {
+        ctx.fillStyle = '#111215';
+        ctx.fillRect(0, 0, halfW, canvasH);
+      }
+
+      // Right Panel: Raw B-Mode + AI Overlays
+      if (imgElementRef.current) {
+        ctx.drawImage(imgElementRef.current, halfW, 0, halfW, canvasH);
+      } else {
+        ctx.fillStyle = '#111215';
+        ctx.fillRect(halfW, 0, halfW, canvasH);
+      }
+
+      const ySup = depthToY(supDepth);
+      const yDeep = depthToY(deepDepth);
+
+      // Mask overlay on right panel
+      if (layerVisibility.showMask) {
+        ctx.save();
+        ctx.fillStyle = `rgba(196, 238, 208, ${layerVisibility.maskOpacity * 0.45})`;
+        ctx.fillRect(halfW, ySup, halfW, Math.max(0, yDeep - ySup));
+        ctx.restore();
+      }
+
+      // Superficial aponeurosis on right panel
+      if (layerVisibility.showSuperficial) {
+        ctx.strokeStyle = '#a8c7fa';
+        ctx.lineWidth = 2.5;
         ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, canvasHeight);
+        ctx.moveTo(halfW, ySup);
+        ctx.lineTo(canvasW, ySup);
+        ctx.stroke();
+
+        ctx.fillStyle = '#a8c7fa';
+        ctx.font = 'bold 10px Segoe UI, sans-serif';
+        ctx.fillText(`SUP: ${supDepth.toFixed(1)}mm`, halfW + 6, Math.max(14, ySup - 4));
+      }
+
+      // Deep aponeurosis on right panel
+      if (layerVisibility.showDeep) {
+        ctx.strokeStyle = '#d0bcff';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(halfW, yDeep);
+        ctx.lineTo(canvasW, yDeep);
+        ctx.stroke();
+
+        ctx.fillStyle = '#d0bcff';
+        ctx.font = 'bold 10px Segoe UI, sans-serif';
+        ctx.fillText(`DEEP: ${deepDepth.toFixed(1)}mm`, halfW + 6, Math.min(canvasH - 6, yDeep + 12));
+      }
+
+      // Center divider line
+      ctx.strokeStyle = '#37393b';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(halfW, 0);
+      ctx.lineTo(halfW, canvasH);
+      ctx.stroke();
+
+      // Badges
+      ctx.fillStyle = 'rgba(19, 19, 20, 0.85)';
+      ctx.fillRect(6, 6, 85, 18);
+      ctx.fillStyle = '#c4c7c5';
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText('RAW B-MODE', 10, 18);
+
+      ctx.fillStyle = 'rgba(19, 19, 20, 0.85)';
+      ctx.fillRect(halfW + 6, 6, 100, 18);
+      ctx.fillStyle = '#a8c7fa';
+      ctx.fillText('AI SEGMENTATION', halfW + 10, 18);
+
+    } else if (viewportMode === 'overlay' || viewportMode === 'raw') {
+      // -------------------------------------------------------------
+      // 2. OVERLAY OR RAW B-MODE CINE VIEW
+      // -------------------------------------------------------------
+      if (imgElementRef.current) {
+        ctx.drawImage(imgElementRef.current, 0, 0, canvasW, canvasH);
+      } else {
+        ctx.fillStyle = '#111215';
+        ctx.fillRect(0, 0, canvasW, canvasH);
+      }
+
+      if (viewportMode === 'overlay') {
+        const ySup = depthToY(supDepth);
+        const yDeep = depthToY(deepDepth);
+
+        // A. Biceps muscle mask overlay
+        if (layerVisibility.showMask) {
+          ctx.save();
+          ctx.fillStyle = `rgba(196, 238, 208, ${layerVisibility.maskOpacity * 0.45})`;
+          ctx.fillRect(0, ySup, canvasW, Math.max(0, yDeep - ySup));
+          ctx.restore();
+        }
+
+        // B. Superficial fascia line (Gemini Blue)
+        if (layerVisibility.showSuperficial) {
+          ctx.strokeStyle = '#a8c7fa';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.moveTo(0, ySup);
+          ctx.lineTo(canvasW, ySup);
+          ctx.stroke();
+
+          ctx.fillStyle = '#a8c7fa';
+          ctx.font = 'bold 11px Segoe UI, sans-serif';
+          ctx.fillText(`SUP: ${supDepth.toFixed(1)}mm`, 8, Math.max(14, ySup - 4));
+        }
+
+        // C. Deep fascia line (Gemini Purple)
+        if (layerVisibility.showDeep) {
+          ctx.strokeStyle = '#d0bcff';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.moveTo(0, yDeep);
+          ctx.lineTo(canvasW, yDeep);
+          ctx.stroke();
+
+          ctx.fillStyle = '#d0bcff';
+          ctx.font = 'bold 11px Segoe UI, sans-serif';
+          ctx.fillText(`DEEP: ${deepDepth.toFixed(1)}mm`, 8, Math.min(canvasH - 6, yDeep + 14));
+        }
+      }
+
+    } else {
+      // -------------------------------------------------------------
+      // 3. PANORAMIC FILMSTRIP VIEWPORT
+      // -------------------------------------------------------------
+      if (imgElementRef.current) {
+        ctx.drawImage(imgElementRef.current, 0, 0, canvasW, canvasH);
+      } else {
+        ctx.fillStyle = '#111215';
+        ctx.fillRect(0, 0, canvasW, canvasH);
+      }
+
+      const n = timestamps.length;
+      if (n >= 2) {
+        // Muscle mask shaded zone
+        if (layerVisibility.showMask) {
+          ctx.save();
+          ctx.fillStyle = `rgba(196, 238, 208, ${layerVisibility.maskOpacity * 0.4})`;
+          ctx.beginPath();
+          for (let i = 0; i < n; i++) {
+            const x = (i / (n - 1)) * canvasW;
+            const y = depthToY(superficialMm[i] || 14.0);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          for (let i = n - 1; i >= 0; i--) {
+            const x = (i / (n - 1)) * canvasW;
+            const y = depthToY(deepMm[i] || 28.0);
+            ctx.lineTo(x, y);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // Superficial Line
+        if (layerVisibility.showSuperficial) {
+          ctx.strokeStyle = '#a8c7fa';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          for (let i = 0; i < n; i++) {
+            const x = (i / (n - 1)) * canvasW;
+            const y = depthToY(superficialMm[i] || 14.0);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+
+        // Deep Fascia Line
+        if (layerVisibility.showDeep) {
+          ctx.strokeStyle = '#d0bcff';
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          for (let i = 0; i < n; i++) {
+            const x = (i / (n - 1)) * canvasW;
+            const y = depthToY(deepMm[i] || 28.0);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+
+        // Interactive Red Line
+        ctx.strokeStyle = '#f28b82';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        for (let i = 0; i < n; i++) {
+          const x = (i / (n - 1)) * canvasW;
+          const y = depthToY(redMm[i] || 32.0);
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+
+        // Playback Needle
+        const needleX = (currentFrameIdx / Math.max(1, totalFrames - 1)) * canvasW;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(needleX, 0);
+        ctx.lineTo(needleX, canvasH);
         ctx.stroke();
       }
     }
 
-    const totalFrames = timestamps.length;
-    if (totalFrames < 2) return;
+    // Depth Grid (10mm to 80mm based on effectiveTotalDepthMm)
+    if (layerVisibility.showGrid) {
+      ctx.font = 'bold 10px Segoe UI, sans-serif';
+      for (let depth = 10; depth <= Math.floor(effectiveTotalDepthMm); depth += 10) {
+        const y = depthToY(depth);
+        if (y < canvasH - 4) {
+          ctx.strokeStyle = 'rgba(148, 163, 184, 0.28)';
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(canvasW, y);
+          ctx.stroke();
+          ctx.setLineDash([]);
 
-    // 2. Depth Reference Grid (Dashed lines at 10, 20, 30, 40, 50, 60, 70, 80 mm)
-    ctx.font = 'bold 11px Segoe UI, sans-serif';
-    for (let depth = 10; depth <= 80; depth += 10) {
-      const y = mmToPixel(depth, canvasHeight, maxDepthMm);
-      ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(canvasWidth, y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Depth Badge
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-      ctx.fillRect(8, y - 9, 44, 18);
-      ctx.fillStyle = '#e2e8f0';
-      ctx.fillText(`${depth} mm`, 12, y + 4);
-    }
-
-    // 3. Time Reference Grid (Every 5 or 10 seconds)
-    const totalTime = timestamps[totalFrames - 1] || 1;
-    const timeStep = totalTime <= 40 ? 5 : 10;
-    for (let t = timeStep; t < totalTime; t += timeStep) {
-      // Find frame closest to time t
-      let closestFrame = 0;
-      let minDiff = 9999;
-      for (let i = 0; i < totalFrames; i++) {
-        const diff = Math.abs(timestamps[i] - t);
-        if (diff < minDiff) {
-          minDiff = diff;
-          closestFrame = i;
+          // Depth Label Chip
+          ctx.fillStyle = 'rgba(26, 27, 30, 0.85)';
+          ctx.fillRect(4, y - 8, 40, 16);
+          ctx.fillStyle = '#c4c7c5';
+          ctx.fillText(`${depth}mm`, 6, y + 4);
         }
       }
-      const x = frameToPixelX(closestFrame, totalFrames, canvasWidth);
+    }
 
-      ctx.strokeStyle = 'rgba(148, 163, 184, 0.2)';
-      ctx.setLineDash([2, 4]);
+    // Brush cursor preview
+    if (mousePos && (toolMode === 'pen' || toolMode === 'eraser')) {
+      ctx.save();
       ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, canvasHeight);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-      ctx.fillRect(x - 16, canvasHeight - 20, 32, 16);
-      ctx.fillStyle = '#94a3b8';
-      ctx.fillText(`${t}s`, x - 10, canvasHeight - 8);
-    }
-
-    // 4. Muscle Compartment Shaded Fill (Orange polygon between Yellow and Red curves)
-    ctx.fillStyle = 'rgba(249, 115, 22, 0.35)';
-    ctx.beginPath();
-    // Top boundary (yellow) forward
-    for (let i = 0; i < totalFrames; i++) {
-      const x = frameToPixelX(i, totalFrames, canvasWidth);
-      const y = mmToPixel(deepMm[i] ?? 24.0, canvasHeight, maxDepthMm);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    // Bottom boundary (red) backward
-    for (let i = totalFrames - 1; i >= 0; i--) {
-      const x = frameToPixelX(i, totalFrames, canvasWidth);
-      const y = mmToPixel(redMm[i] ?? (deepMm[i] ?? 24.0) + 12.0, canvasHeight, maxDepthMm);
-      ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-    ctx.fill();
-
-    // 5. Superficial Fascia (Cyan #00f2fe)
-    ctx.strokeStyle = '#00f2fe';
-    ctx.lineWidth = 2.0;
-    ctx.beginPath();
-    for (let i = 0; i < totalFrames; i++) {
-      const x = frameToPixelX(i, totalFrames, canvasWidth);
-      const y = mmToPixel(superficialMm[i] ?? 12.0, canvasHeight, maxDepthMm);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // 6. Deep Fascia (Yellow #fde047)
-    ctx.strokeStyle = '#fde047';
-    ctx.lineWidth = 2.0;
-    ctx.beginPath();
-    for (let i = 0; i < totalFrames; i++) {
-      const x = frameToPixelX(i, totalFrames, canvasWidth);
-      const y = mmToPixel(deepMm[i] ?? 24.0, canvasHeight, maxDepthMm);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // 7. Interactive Kinetic Red Line (#ff4444)
-    ctx.strokeStyle = '#ff4444';
-    ctx.lineWidth = 3.0;
-    ctx.beginPath();
-    for (let i = 0; i < totalFrames; i++) {
-      const x = frameToPixelX(i, totalFrames, canvasWidth);
-      const y = mmToPixel(redMm[i] ?? (deepMm[i] ?? 24.0) + 12.0, canvasHeight, maxDepthMm);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // 8. Brush Indicator Circle
-    if (cursorPos) {
-      ctx.strokeStyle = toolMode === 'pen' ? 'rgba(255, 68, 68, 0.8)' : 'rgba(56, 189, 248, 0.8)';
+      ctx.arc(mousePos.x, mousePos.y, brushRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = toolMode === 'pen' ? '#f28b82' : '#a8c7fa';
       ctx.lineWidth = 1.5;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.arc(cursorPos.x, cursorPos.y, brushRadius * zoom, 0, Math.PI * 2);
       ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.restore();
     }
-  }, [canvasWidth, canvasHeight, superficialMm, deepMm, redMm, timestamps, cursorPos, brushRadius, zoom, toolMode]);
+  }, [
+    viewportMode,
+    currentFrameIdx,
+    totalFrames,
+    superficialMm,
+    deepMm,
+    redMm,
+    timestamps,
+    layerVisibility,
+    canvasW,
+    canvasH,
+    mousePos,
+    toolMode,
+    brushRadius,
+    effectiveTotalDepthMm,
+  ]);
 
   useEffect(() => {
     renderCanvas();
   }, [renderCanvas]);
 
-  // Apply brush sculpting with quadratic smooth falloff
-  const applyDraw = useCallback(
-    (clientX: number, clientY: number) => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const rect = canvas.getBoundingClientRect();
-      const x = clientX - rect.left;
-      const y = clientY - rect.top;
-
-      const totalFrames = timestamps.length;
-      if (totalFrames === 0) return;
-
-      const frameIdx = pixelXToFrame(x, totalFrames, canvasWidth);
-      const targetDepthMm = pixelToMm(y, canvasHeight, maxDepthMm);
-
-      const framesPerPx = totalFrames / canvasWidth;
-      const brushFrames = Math.max(2, Math.round(brushRadius * framesPerPx * 1.5));
-
-      const startIdx = Math.max(0, frameIdx - brushFrames);
-      const endIdx = Math.min(totalFrames - 1, frameIdx + brushFrames);
-
-      const updated = [...redMm];
-      for (let i = startIdx; i <= endIdx; i++) {
-        const dist = Math.abs(i - frameIdx) / (brushFrames + 1e-5);
-        const weight = Math.max(0, 1 - dist * dist); // Smooth quadratic falloff
-
-        if (toolMode === 'pen') {
-          updated[i] = (1 - weight) * updated[i] + weight * targetDepthMm;
-        } else {
-          // Reset towards resting anatomical baseline
-          const baseline = (deepMm[i] ?? 24.0) + 6.0;
-          updated[i] = (1 - weight) * updated[i] + weight * baseline;
-        }
-      }
-
-      onRedCurveChange(updated);
-    },
-    [timestamps, canvasWidth, canvasHeight, brushRadius, redMm, deepMm, toolMode, onRedCurveChange]
-  );
-
+  // Mouse event handlers
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (e.button !== 0) return;
+    if (toolMode !== 'pen' && toolMode !== 'eraser') return;
     isDrawingRef.current = true;
-    applyDraw(e.clientX, e.clientY);
+    applyBrush(e);
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
+    const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    setMousePos({ x, y });
 
-    setCursorPos({ x, y });
-
-    const totalFrames = timestamps.length;
-    if (totalFrames > 0 && onHoverData) {
-      const fIdx = pixelXToFrame(x, totalFrames, canvasWidth);
-      const tSec = timestamps[fIdx] ?? 0;
-      const dMm = pixelToMm(y, canvasHeight, maxDepthMm);
-      const sup = superficialMm[fIdx] ?? 12;
-      const deep = redMm[fIdx] ?? deepMm[fIdx] ?? 24;
-      const thick = Math.max(0, deep - sup);
-      onHoverData(tSec, fIdx + 1, dMm, thick);
+    // Hover telemetry calculation
+    if (onHoverData && timestamps.length > 0) {
+      const ratio = Math.max(0, Math.min(1, x / canvasW));
+      const frameIdx = Math.round(ratio * (timestamps.length - 1));
+      const tSec = timestamps[frameIdx] || 0;
+      const depth = (y / canvasH) * effectiveTotalDepthMm;
+      const th = Math.abs((deepMm[frameIdx] || 28) - (superficialMm[frameIdx] || 14));
+      onHoverData(tSec, frameIdx, depth, th);
     }
 
-    if (isDrawingRef.current) {
-      applyDraw(e.clientX, e.clientY);
+    if (isDrawingRef.current && (toolMode === 'pen' || toolMode === 'eraser')) {
+      applyBrush(e);
     }
   };
 
@@ -278,21 +474,137 @@ export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
 
   const handleMouseLeave = () => {
     isDrawingRef.current = false;
-    setCursorPos(null);
+    setMousePos(null);
+  };
+
+  const applyBrush = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const n = timestamps.length;
+    if (n < 2) return;
+
+    const targetDepthMm = (y / canvasH) * effectiveTotalDepthMm;
+    const centerIdx = Math.round((x / canvasW) * (n - 1));
+    const spreadFrames = Math.max(1, Math.round((brushRadius / canvasW) * n * 1.5));
+
+    const updated = [...redMm];
+    for (let i = Math.max(0, centerIdx - spreadFrames); i <= Math.min(n - 1, centerIdx + spreadFrames); i++) {
+      const dist = Math.abs(i - centerIdx) / Math.max(1, spreadFrames);
+      const weight = Math.cos(dist * (Math.PI / 2));
+
+      if (toolMode === 'pen') {
+        updated[i] = updated[i] * (1 - weight) + targetDepthMm * weight;
+      } else if (toolMode === 'eraser') {
+        const resetDepth = (deepMm[i] || 28.0) + 6.0;
+        updated[i] = updated[i] * (1 - weight) + resetDepth * weight;
+      }
+    }
+    onRedCurveChange(updated);
   };
 
   return (
-    <div className="relative overflow-x-auto overflow-y-hidden border border-[#334155] rounded-lg bg-[#0b1120] shadow-2xl">
-      <canvas
-        ref={canvasRef}
-        width={canvasWidth}
-        height={canvasHeight}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
-        className="cursor-crosshair block"
-      />
+    <div
+      ref={containerRef}
+      className="flex-1 flex flex-col items-center justify-center bg-[var(--canvas-bg)] p-3 overflow-auto relative select-none"
+    >
+      {/* Top Floating Viewport Control Bar */}
+      <div className="absolute top-4 left-6 z-20 flex items-center gap-1.5 bg-[var(--bg-surface)]/90 backdrop-blur-md px-2.5 py-1.5 rounded-xl border border-[var(--border-subtle)] shadow-xl text-xs font-semibold">
+        {/* View Mode Pills (Overlay, Side-by-Side, Raw, Filmstrip) */}
+        <button
+          onClick={() => onSetViewportMode('overlay')}
+          className={`px-2 py-1 rounded-md transition ${
+            viewportMode === 'overlay'
+              ? 'bg-[var(--gemini-blue)] text-black font-bold shadow-sm'
+              : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+          }`}
+        >
+          Soft Overlay
+        </button>
+        <button
+          onClick={() => onSetViewportMode('side_by_side')}
+          className={`px-2 py-1 rounded-md transition ${
+            viewportMode === 'side_by_side'
+              ? 'bg-[var(--gemini-blue)] text-black font-bold shadow-sm'
+              : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+          }`}
+        >
+          Side-by-Side Dual
+        </button>
+        <button
+          onClick={() => onSetViewportMode('raw')}
+          className={`px-2 py-1 rounded-md transition ${
+            viewportMode === 'raw'
+              ? 'bg-[var(--gemini-blue)] text-black font-bold shadow-sm'
+              : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+          }`}
+        >
+          Raw B-Mode
+        </button>
+        <button
+          onClick={() => onSetViewportMode('filmstrip')}
+          className={`px-2 py-1 rounded-md transition ${
+            viewportMode === 'filmstrip'
+              ? 'bg-[var(--gemini-blue)] text-black font-bold shadow-sm'
+              : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]'
+          }`}
+        >
+          Filmstrip
+        </button>
+
+        <div className="w-[1px] h-4 bg-[var(--border-subtle)] mx-1" />
+
+        {/* Zoom Controls */}
+        <button
+          onClick={() => onSetZoom(1.0)}
+          className="px-2 py-1 rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] transition flex items-center gap-1"
+          title="Fit Screen (Ctrl+0)"
+        >
+          <Maximize2 size={12} />
+          <span>Fit Screen</span>
+        </button>
+        <button
+          onClick={() => onSetZoom(Math.max(0.5, Number((zoom - 0.25).toFixed(2))))}
+          className="p-1 rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] transition"
+          title="Zoom Out (-)"
+        >
+          <ZoomOut size={13} />
+        </button>
+        <span className="font-mono text-[11px] text-[var(--text-muted)] w-10 text-center">
+          {Math.round(zoom * 100)}%
+        </span>
+        <button
+          onClick={() => onSetZoom(Math.min(2.5, Number((zoom + 0.25).toFixed(2))))}
+          className="p-1 rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] transition"
+          title="Zoom In (+)"
+        >
+          <ZoomIn size={13} />
+        </button>
+      </div>
+
+      {/* Photoshop Document Canvas (Centered with Drop Shadow) */}
+      <div
+        className="rounded-xl overflow-hidden border border-[var(--border-subtle)] shadow-2xl relative bg-black transition-all"
+        style={{ width: `${canvasW}px`, height: `${canvasH}px` }}
+      >
+        <canvas
+          ref={canvasRef}
+          width={canvasW}
+          height={canvasH}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseLeave}
+          className={`block w-full h-full ${
+            toolMode === 'pen' || toolMode === 'eraser'
+              ? 'cursor-crosshair'
+              : toolMode === 'pan'
+              ? 'cursor-grab'
+              : 'cursor-default'
+          }`}
+        />
+      </div>
     </div>
   );
 };
