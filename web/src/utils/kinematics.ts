@@ -1,5 +1,18 @@
 import { FrameKinematics, BiomechanicsSummary } from '../types/ultrasound';
 
+/**
+ * Calculates percentile from an array of numbers
+ */
+function getPercentile(arr: number[], percentile: number): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const index = (percentile / 100) * (sorted.length - 1);
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  const weight = index - lower;
+  return sorted[lower] * (1 - weight) + sorted[upper] * weight;
+}
+
 export function computeKinematics(
   superficialMm: number[],
   deepMm: number[],
@@ -22,31 +35,29 @@ export function computeKinematics(
     };
   }
 
-  // Raw thickness values: thickness between deep and superficial, or red and superficial
+  // Thickness per frame: deep fascia minus superficial fascia (or red curve if modified)
   const thicknessArray: number[] = [];
   for (let i = 0; i < n; i++) {
-    const s = superficialMm[i] ?? 12.0;
-    const d = redMm[i] ?? deepMm[i] ?? s + 10.0;
-    thicknessArray.push(Math.max(0.5, d - s));
+    const s = superficialMm[i] ?? 14.0;
+    const d = redMm[i] ?? deepMm[i] ?? 28.0;
+    thicknessArray.push(Math.max(0.1, d - s));
   }
 
-  // Baseline resting thickness: median of lowest 25% of values
-  const sorted = [...thicknessArray].sort((a, b) => a - b);
-  const quartileIdx = Math.max(1, Math.floor(n * 0.25));
-  const restSlice = sorted.slice(0, quartileIdx);
-  const restThicknessMm = restSlice.reduce((acc, v) => acc + v, 0) / restSlice.length;
+  // Baseline resting thickness: 10th percentile matching Python np.percentile(thickness_mm, 10)
+  const restThicknessMm = getPercentile(thicknessArray, 10);
+  const peakThicknessMm = Math.max(...thicknessArray);
+  const deltaThicknessMm = Math.max(0, peakThicknessMm - restThicknessMm);
+  const percentageIncrease = restThicknessMm > 0 ? (deltaThicknessMm / restThicknessMm) * 100 : 0;
 
-  const activeThreshold = restThicknessMm + thresholdContractionDeltaMm;
+  // Active contraction detection (active if thickness > rest + delta threshold or > 18.0 mm)
+  const activeThreshold = Math.max(18.0, restThicknessMm + thresholdContractionDeltaMm);
 
   let activeCount = 0;
-  let peakThicknessMm = 0;
-
   const frames: FrameKinematics[] = [];
   for (let i = 0; i < n; i++) {
     const th = thicknessArray[i];
     const isActive = th > activeThreshold;
     if (isActive) activeCount++;
-    if (th > peakThicknessMm) peakThicknessMm = th;
 
     frames.push({
       frameIndex: i,
@@ -54,13 +65,10 @@ export function computeKinematics(
       state: isActive ? 'ACTIVE' : 'RELAX',
       superficialDepthMm: Number(superficialMm[i].toFixed(3)),
       deepDepthMm: Number(deepMm[i].toFixed(3)),
-      redBoundaryDepthMm: Number(redMm[i].toFixed(3)),
+      redBoundaryDepthMm: Number((redMm[i] ?? deepMm[i]).toFixed(3)),
       muscleThicknessMm: Number(th.toFixed(3)),
     });
   }
-
-  const deltaThicknessMm = Math.max(0, peakThicknessMm - restThicknessMm);
-  const percentageIncrease = restThicknessMm > 0 ? (deltaThicknessMm / restThicknessMm) * 100 : 0;
 
   return {
     frames,

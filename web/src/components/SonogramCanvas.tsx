@@ -22,6 +22,7 @@ interface SonogramCanvasProps {
   onRedCurveChange: (newRedMm: number[]) => void;
   onHoverData?: (timeSec: number, frame: number, depthMm: number, thicknessMm: number) => void;
   canvasRef?: React.RefObject<HTMLCanvasElement>;
+  currentMask?: Uint8Array | null;
 }
 
 export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
@@ -44,6 +45,7 @@ export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
   onRedCurveChange,
   onHoverData,
   canvasRef: externalCanvasRef,
+  currentMask,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const internalCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -165,6 +167,37 @@ export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
     maxDepthMm > 0 && maxDepthMm < 150 ? maxDepthMm : imgH * pixelSpacingMm
   );
 
+  // Generate offscreen mask canvas whenever currentMask or opacity changes
+  const maskCanvas = React.useMemo(() => {
+    if (!currentMask) return null;
+    const w = imgNaturalSize.width;
+    const h = imgNaturalSize.height;
+    if (w <= 0 || h <= 0) return null;
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = w;
+    offscreen.height = h;
+    const offCtx = offscreen.getContext('2d');
+    if (!offCtx) return null;
+
+    const imgData = offCtx.createImageData(w, h);
+    const data = imgData.data;
+    const alphaVal = Math.round(255 * layerVisibility.maskOpacity * 0.45);
+
+    const len = Math.min(currentMask.length, w * h);
+    for (let i = 0; i < len; i++) {
+      if (currentMask[i] > 0) {
+        const idx = i * 4;
+        data[idx] = 129;     // Soft Sage Green (matching Python [129, 145, 126])
+        data[idx + 1] = 145;
+        data[idx + 2] = 126;
+        data[idx + 3] = alphaVal;
+      }
+    }
+    offCtx.putImageData(imgData, 0, 0);
+    return offscreen;
+  }, [currentMask, layerVisibility.maskOpacity, imgNaturalSize.width, imgNaturalSize.height]);
+
   // Main Render Routine
   const renderCanvas = useCallback(() => {
     const canvas = canvasRef.current;
@@ -214,10 +247,14 @@ export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
 
       // Mask overlay on right panel
       if (layerVisibility.showMask) {
-        ctx.save();
-        ctx.fillStyle = `rgba(196, 238, 208, ${layerVisibility.maskOpacity * 0.45})`;
-        ctx.fillRect(halfW, ySup, halfW, Math.max(0, yDeep - ySup));
-        ctx.restore();
+        if (maskCanvas) {
+          ctx.drawImage(maskCanvas, halfW, 0, halfW, canvasH);
+        } else {
+          ctx.save();
+          ctx.fillStyle = `rgba(129, 145, 126, ${layerVisibility.maskOpacity * 0.45})`;
+          ctx.fillRect(halfW, ySup, halfW, Math.max(0, yDeep - ySup));
+          ctx.restore();
+        }
       }
 
       // Superficial aponeurosis on right panel
@@ -285,10 +322,14 @@ export const SonogramCanvas: React.FC<SonogramCanvasProps> = ({
 
         // A. Biceps muscle mask overlay
         if (layerVisibility.showMask) {
-          ctx.save();
-          ctx.fillStyle = `rgba(196, 238, 208, ${layerVisibility.maskOpacity * 0.45})`;
-          ctx.fillRect(0, ySup, canvasW, Math.max(0, yDeep - ySup));
-          ctx.restore();
+          if (maskCanvas) {
+            ctx.drawImage(maskCanvas, 0, 0, canvasW, canvasH);
+          } else {
+            ctx.save();
+            ctx.fillStyle = `rgba(129, 145, 126, ${layerVisibility.maskOpacity * 0.45})`;
+            ctx.fillRect(0, ySup, canvasW, Math.max(0, yDeep - ySup));
+            ctx.restore();
+          }
         }
 
         // B. Superficial fascia line (Gemini Blue)

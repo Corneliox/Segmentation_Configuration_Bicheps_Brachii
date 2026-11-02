@@ -18,7 +18,11 @@ import { SampleHubModal } from './components/SampleHubModal';
 import { StatusBar } from './components/StatusBar';
 import { computeKinematics } from './utils/kinematics';
 import { exportKinematicsToCsv, exportCanvasToPng } from './utils/exportHelpers';
-import { runSegmentationInference, loadModelMetadata } from './services/onnxInference';
+import {
+  loadModelMetadata,
+  runSingleFrameInference,
+  runCineSequenceInference,
+} from './services/onnxInference';
 
 export function App() {
   // Theme and Localization
@@ -100,6 +104,7 @@ export function App() {
   const [superficialMm, setSuperficialMm] = useState<number[]>([]);
   const [deepMm, setDeepMm] = useState<number[]>([]);
   const [redMm, setRedMm] = useState<number[]>([]);
+  const [masksCache, setMasksCache] = useState<(Uint8Array | null)[]>([]);
 
   // History stack for Undo
   const historyRef = useRef<number[][]>([]);
@@ -182,6 +187,7 @@ export function App() {
     setDeepMm(deep);
     setRedMm(red);
     setFrameImages(imgs);
+    setMasksCache(new Array(totalF).fill(null));
     historyRef.current = [red];
 
     setStatusMessage(`Loaded sample dataset: ${sampleId.toUpperCase()} (${totalF} frames)`);
@@ -291,6 +297,7 @@ export function App() {
       const src = event.target?.result as string;
       setFrameImages([src]);
       setCurrentFrameIdx(0);
+      setMasksCache([null]);
       setStatusMessage(`Loaded image: ${file.name}`);
     };
     reader.readAsDataURL(file);
@@ -328,46 +335,69 @@ export function App() {
       setSuperficialMm(new Array(total).fill(14.0));
       setDeepMm(new Array(total).fill(28.0));
       setRedMm(new Array(total).fill(34.0));
+      setMasksCache(new Array(total).fill(null));
 
       setStatusMessage(`Successfully loaded ${total} cine frames from folder.`);
     });
   };
 
-  // AI Auto-Segmentation Trigger
+  // Auto-segment current frame on scrub if not yet segmented
+  useEffect(() => {
+    if (isAiRunning || !frameImages[currentFrameIdx] || masksCache[currentFrameIdx]) {
+      return;
+    }
+    let isCancelled = false;
+    runSingleFrameInference(frameImages[currentFrameIdx], currentPreset.pixel_spacing_mm)
+      .then((res) => {
+        if (!isCancelled && res) {
+          setMasksCache((prev) => {
+            const next = [...prev];
+            next[currentFrameIdx] = res.maskOrig;
+            return next;
+          });
+          setSuperficialMm((prev) => {
+            const next = [...prev];
+            next[currentFrameIdx] = res.supDepthMm;
+            return next;
+          });
+          setDeepMm((prev) => {
+            const next = [...prev];
+            next[currentFrameIdx] = res.deepDepthMm;
+            return next;
+          });
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentFrameIdx, frameImages, isAiRunning, masksCache, currentPreset.pixel_spacing_mm]);
+
+  // AI Auto-Segmentation Trigger (Batch cine inference across all frames matching Python)
   const handleRunAiSegmentation = async () => {
-    if (!canvasRef.current) return;
+    if (frameImages.length === 0) return;
     setIsAiRunning(true);
-    setStatusMessage('Running ONNX Neural Segmentation...');
+    setStatusMessage(`Segmenting ${frameImages.length} frames with ONNX U-Net...`);
 
     try {
-      const result = await runSegmentationInference(canvasRef.current, (msg) => {
-        setStatusMessage(msg);
-      });
-
-      if (result) {
-        const n = timestamps.length;
-        const newSup: number[] = [];
-        const newDeep: number[] = [];
-        const newRed: number[] = [];
-
-        for (let i = 0; i < n; i++) {
-          const ratio = i / Math.max(1, n - 1);
-          const srcIdx = Math.min(
-            result.superficialMm.length - 1,
-            Math.round(ratio * (result.superficialMm.length - 1))
-          );
-          newSup.push(result.superficialMm[srcIdx]);
-          newDeep.push(result.deepMm[srcIdx]);
-          newRed.push(result.deepMm[srcIdx] + 6.0);
+      const result = await runCineSequenceInference(
+        frameImages,
+        currentPreset.pixel_spacing_mm,
+        (_pct, msg) => {
+          setStatusMessage(msg);
         }
+      );
 
-        setSuperficialMm(newSup);
-        setDeepMm(newDeep);
-        setRedMm(newRed);
-        historyRef.current.push([...newRed]);
-        setStatusMessage('AI Segmentation Complete! Mask and aponeurosis synchronized.');
+      if (result && result.masks.length > 0) {
+        setMasksCache(result.masks);
+        setSuperficialMm(result.superficialMm);
+        setDeepMm(result.deepMm);
+        setRedMm(result.deepMm.map((d) => d + 6.0));
+        historyRef.current.push(result.deepMm.map((d) => d + 6.0));
+        setStatusMessage(`AI Segmentation Complete! Analyzed ${result.masks.length} cine frames.`);
       } else {
-        setStatusMessage('Local ONNX runtime processed heuristic segmentation fallback.');
+        setStatusMessage('AI Segmentation was cancelled or produced no output.');
       }
     } catch (err) {
       console.error(err);
@@ -454,6 +484,7 @@ export function App() {
           onHoverData={(t, f, d, th) =>
             setHoverInfo({ timeSec: t, frame: f, depthMm: d, thicknessMm: th })
           }
+          currentMask={masksCache[currentFrameIdx]}
         />
 
         {/* Right Dockable Photoshop Inspector */}
